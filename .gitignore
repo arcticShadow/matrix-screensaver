@@ -1,5 +1,6 @@
 build/
 *.saver
+*.saver.zip
 .DS_Store
 
 # Beads / Dolt files (added by bd init)
@@ -7,3 +8,9 @@ build/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# Gas City / local agent tooling
+.beads/*
+!.beads/identity.toml
+.gc/
+.claude/

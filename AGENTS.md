@@ -2,14 +2,13 @@
 
 ## Project overview
 
-`matrix-screensaver` is a macOS `.saver` bundle — a Solarized-dark, brutalist, matrix-rain screensaver with a JS/TS engineering glyph set and the Jude logo watermarked at center.
+`matrix-screensaver` is a macOS `.saver` bundle — a Solarized-dark, brutalist, matrix-rain screensaver with a JS/TS engineering glyph set and the Jude logo emerging from a parallel "ghost" rain stream at center.
 
 ## File map
 
 | File | Purpose |
 |------|---------|
-| `MatrixView.swift` | The entire screensaver — `ScreenSaverView` subclass. Single file, no Xcode project needed. |
-| `preview.html` | Browser-runnable visual reference. Tunables in `CFG` mirror `Cfg` in Swift 1:1. |
+| `MatrixView.swift` | The entire screensaver — `ScreenSaverView` subclass. Single file, no Xcode project needed. **The single source of truth.** |
 | `README.md` | Palette reference, build steps, design notes. |
 | `AGENTS.md` | This file. |
 
@@ -18,10 +17,12 @@
 ```bash
 swiftc MatrixView.swift \
   -module-name SolarizedMatrix \
-  -emit-library \
+  -emit-library -Xlinker -bundle \
   -o build/SolarizedMatrix.saver/Contents/MacOS/SolarizedMatrix \
   -framework ScreenSaver -framework AppKit -framework Foundation \
   -target arm64-apple-macosx13.0
+
+codesign -s - build/SolarizedMatrix.saver
 
 cp -r build/SolarizedMatrix.saver ~/Library/Screen\ Savers/
 killall legacyScreenSaver 2>/dev/null; killall ScreenSaverEngine 2>/dev/null
@@ -62,8 +63,8 @@ Each column carries independent `colAlpha` (0.25–1.0) and `colColor` (Solarize
 
 ## Jude logo
 
-SVG sourced from `jude.law/images/layout/logo.svg`, embedded as a string constant, loaded as `NSImage`, and drawn centered at 120 × 120 px with 18% opacity.
+SVG sourced from `jude.law/images/layout/logo.svg`, embedded as a string constant, loaded as `NSImage`. Rather than a solid watermark, the logo emerges from a parallel "ghost" rain stream: the logo is rendered off-screen and its alpha channel sampled per glyph cell to build a `[col][row]` mask (`buildLogoMask`); a second rain stream is then drawn only on cells inside that mask, in a warmer/brighter palette (`logoStream`). The bounding box is `Cfg.logoSizeRatio` (`0.60`) of `min(width, height)` and stream alpha is `Cfg.logoAlpha` (`0.80`).
 
-## What to keep in sync
+## Source of truth
 
-`preview.html` is the visual source of truth. If you change speed, glyph set, or color palette in the Swift, mirror the change in the HTML's `CFG` / `STREAM` / `GLYPHS` so the browser preview stays accurate.
+`MatrixView.swift` is the single source of truth — there is no separate browser preview. All tunables live in `Cfg`; edit and rebuild (see *Build & install*) to see changes.

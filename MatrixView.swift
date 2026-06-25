@@ -26,6 +26,20 @@ final class MatrixView: ScreenSaverView {
         // How much each frame fades toward background. Lower = longer trails.
         // At 0.018 and 30 fps a glyph takes ~4 seconds to fade out (~96 rows).
         static let fadeAlpha: CGFloat = 0.018
+        // Logo "ghost" rain: bounding box as a fraction of min(width,height).
+        static let logoSizeRatio: CGFloat = 0.60
+        // Peak alpha of logo-stream glyphs at full fade-in.
+        static let logoAlphaMax:  CGFloat = 0.95
+        // Parallel "ghost" rain streams per column inside the logo mask. The logo
+        // rain only paints on masked cells, so it needs many more streams than the
+        // main rain (1/col) to read as a filled shape instead of sparse dots.
+        static let logoStreams:   Int     = 10
+        // Fade in/out envelope: the logo eases toward a target that flips between
+        // "visible" and "hidden" on a random interval, so the mark breathes in and
+        // out of the rain rather than sitting there statically.
+        static let logoFadeSpeed: CGFloat = 0.02   // per-frame ease toward target (smaller = slower)
+        static let logoHoldMin:   Int     = 150    // min frames a phase holds (~5s @30fps)
+        static let logoHoldMax:   Int     = 420    // max frames a phase holds (~14s @30fps)
     }
 
     // MARK: - Solarized palette
@@ -39,6 +53,9 @@ final class MatrixView: ScreenSaverView {
     private let base03    = hex("002b36")
     private let headColor = hex("eee8d5")
     private let stream: [NSColor] = ["2aa198","268bd2","859900","6c71c4","b58900"].map(hex)
+    // Logo-stream palette — brighter warm greens & teals so the logo shape reads
+    // as "materialised" from within the cooler main rain.
+    private let logoStream: [NSColor] = ["6ef0c2","86e0f5","cdeb6e"].map(hex)
 
     // MARK: - Glyph sets
     private static let bodyGlyphs: [String] = {
@@ -87,6 +104,16 @@ final class MatrixView: ScreenSaverView {
     private var colResetAt: [CGFloat] = []   // row at which this drop resets
     private var didInit = false
 
+    // MARK: - Logo "ghost" rain state
+    // A second rain stream, drawn only where it falls inside the logo shape.
+    private var logoMask:    [[Bool]] = []   // [col][row] -> cell is inside the logo glyph
+    private var logoDrops:   [[CGFloat]] = []   // [col][stream] parallel ghost drops
+    private var logoColChar: [[String]]  = []   // [col][stream]
+    // Fade in/out envelope state
+    private var logoEnv:       CGFloat = 0       // eased visibility 0…1
+    private var logoEnvTarget: CGFloat = 0       // start hidden so the mark fades in shortly after launch
+    private var logoEnvHold:   Int     = 0       // frames until next target flip
+
     // MARK: - Lifecycle
     override init?(frame: NSRect, isPreview: Bool) {
         super.init(frame: frame, isPreview: isPreview)
@@ -123,7 +150,11 @@ final class MatrixView: ScreenSaverView {
         colHead    = (0..<cols).map { _ in rh() }
         colResetAt = (0..<cols).map { _ in resetThreshold(bufH: bounds.height) }
 
+        logoDrops   = (0..<cols).map { _ in (0..<Cfg.logoStreams).map { _ in CGFloat.random(in: 0...rows) } }
+        logoColChar = (0..<cols).map { _ in (0..<Cfg.logoStreams).map { _ in rc() } }
+
         buffer  = makeBuffer()
+        buildLogoMask(bw: bounds.width, bh: bounds.height)
         didInit = true
     }
 
@@ -146,6 +177,17 @@ final class MatrixView: ScreenSaverView {
               let screenCtx = NSGraphicsContext.current?.cgContext else { return }
 
         let bw = CGFloat(buf.width), bh = CGFloat(buf.height)
+
+        // Advance the logo fade envelope: flip to a new target on a random interval,
+        // then ease toward it so the mark fades in/out of the rain.
+        if logoEnvHold <= 0 {
+            logoEnvTarget = logoEnvTarget < 0.5 ? CGFloat.random(in: 0.80...1.0)
+                                                : CGFloat.random(in: 0.0...0.10)
+            logoEnvHold   = Int.random(in: Cfg.logoHoldMin...Cfg.logoHoldMax)
+        }
+        logoEnvHold -= 1
+        logoEnv += (logoEnvTarget - logoEnv) * Cfg.logoFadeSpeed
+        let logoAlphaNow = Cfg.logoAlphaMax * logoEnv
 
         // Step 1: fade buffer toward base03 (builds the glowing trail effect)
         buf.setFillColor(base03.withAlphaComponent(Cfg.fadeAlpha).cgColor)
@@ -180,9 +222,28 @@ final class MatrixView: ScreenSaverView {
                 colHead[i]    = rh()
                 colResetAt[i] = resetThreshold(bufH: bh)
             }
-        }
 
-        drawJudeLogo(bw: bw, bh: bh)
+            // Logo "ghost" rain: advance a parallel drop and draw it only when
+            // it lands on a cell inside the logo mask, so the shape emerges
+            // from within the falling code rather than as a solid watermark.
+            if i < logoMask.count {
+                for k in 0..<logoDrops[i].count {
+                    let logoRow = Int(logoDrops[i][k])
+                    if logoAlphaNow > 0.01, logoRow >= 0, logoRow < logoMask[i].count, logoMask[i][logoRow] {
+                        let lyTop = bh - logoDrops[i][k] * Cfg.fontSize
+                        let logoCol = logoStream[(i + k) % logoStream.count]
+                        drawGlyph(logoColChar[i][k], at: CGPoint(x: x, y: lyTop),
+                                  color: logoCol.withAlphaComponent(logoAlphaNow), font: font)
+                        if Double.random(in: 0...1) > 0.88 { logoColChar[i][k] = rc() }
+                    }
+                    logoDrops[i][k] += (Cfg.fallMin + CGFloat.random(in: 0...(Cfg.fallMax - Cfg.fallMin))) * 0.9
+                    if logoDrops[i][k] > colResetAt[i] {
+                        logoDrops[i][k]   = CGFloat.random(in: -4...0)
+                        logoColChar[i][k] = rc()
+                    }
+                }
+            }
+        }
 
         NSGraphicsContext.restoreGraphicsState()
 
@@ -192,14 +253,52 @@ final class MatrixView: ScreenSaverView {
         }
     }
 
-    private func drawJudeLogo(bw: CGFloat, bh: CGFloat) {
-        guard let logo = judeLogo else { return }
-        let size: CGFloat = isPreview ? 40 : 120
-        let rect = CGRect(x: bw / 2 - size / 2, y: bh / 2 - size / 2,
-                          width: size, height: size)
-        NSGraphicsContext.current?.cgContext.setAlpha(0.18)
-        logo.draw(in: rect)
-        NSGraphicsContext.current?.cgContext.setAlpha(1.0)
+    /// Build the `[col][row]` mask of which glyph cells fall inside the logo
+    /// shape, by rendering the logo into an off-screen ARGB context at
+    /// `logoSize × logoSize` and sampling its alpha channel per cell. Rebuilt
+    /// from `setup()` so it tracks the current bounds / column count.
+    private func buildLogoMask(bw: CGFloat, bh: CGFloat) {
+        let rowCount = max(0, Int(bh / Cfg.fontSize))
+        // Default every cell to "outside" so the draw loop can index safely even
+        // when the logo image is unavailable or the context can't be created.
+        logoMask = [[Bool]](repeating: [Bool](repeating: false, count: rowCount),
+                            count: cols)
+
+        let logoSize = (min(bw, bh) * (isPreview ? 0.35 : Cfg.logoSizeRatio))
+            .rounded(.down)
+        let dim = Int(logoSize)
+        guard dim > 0, let logo = judeLogo else { return }
+
+        let bytesPerRow = dim * 4
+        guard let ctx = CGContext(data: nil, width: dim, height: dim,
+                                  bitsPerComponent: 8, bytesPerRow: bytesPerRow,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let data = ctx.data else { return }
+
+        let nsCtx = NSGraphicsContext(cgContext: ctx, flipped: false)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = nsCtx
+        logo.draw(in: CGRect(x: 0, y: 0, width: logoSize, height: logoSize))
+        NSGraphicsContext.restoreGraphicsState()
+
+        let bytes = data.bindMemory(to: UInt8.self, capacity: bytesPerRow * dim)
+        let logoOriginX = bw / 2 - logoSize / 2
+        let logoOriginY = bh / 2 - logoSize / 2
+
+        for i in 0..<cols {
+            for r in 0..<rowCount {
+                let screenX = CGFloat(i) * Cfg.fontSize + Cfg.fontSize / 2
+                // y-up: row 0 is the top of the screen (matches the draw loop).
+                let screenY = bh - CGFloat(r) * Cfg.fontSize - Cfg.fontSize / 2
+                let lx = Int((screenX - logoOriginX) / logoSize * logoSize)
+                let ly = Int((screenY - logoOriginY) / logoSize * logoSize)
+                if lx >= 0, lx < dim, ly >= 0, ly < dim {
+                    let alpha = bytes[ly * bytesPerRow + lx * 4 + 3]
+                    logoMask[i][r] = alpha > 40
+                }
+            }
+        }
     }
 
     private func drawGlyph(_ s: String, at p: CGPoint, color: NSColor, font: NSFont) {

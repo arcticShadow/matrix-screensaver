@@ -1,19 +1,19 @@
 # Solarized Matrix — Brutalist macOS Screensaver
 
-Starter kit. The visual design is lifted from the **Inbox Triage V2** artifact's
-"code river" canvas background and its Solarized-dark palette, reworked into a
-full-screen matrix-rain screensaver with a brutalist mono overlay.
+A Solarized-dark, brutalist, matrix-rain screensaver for macOS. Half-width
+katakana and a JS/TS engineering glyph set; bright base3 head glyph; Solarized
+accent colour-per-column.
 
 ## What's here
 
 | File | Purpose |
 |------|---------|
-| `preview.html` | Open in any browser → see the exact look, full screen. The visual source of truth. |
-| `MatrixView.swift` | `ScreenSaverView` port of the effect. Drop into an Xcode Screen Saver target. |
-| `README.md` | This file — palette reference + build/install steps + a prompt for code mode. |
+| `MatrixView.swift` | The entire screensaver — single `ScreenSaverView` subclass. The source of truth for the look. |
+| `build/SolarizedMatrix.saver/` | Bundle skeleton (`Info.plist` + `MacOS/`). Rebuild the binary from source. |
+| `README.md` | This file — palette reference + build/install steps. |
 
-Open `preview.html` first to confirm the aesthetic. Tunables (`CFG` in the HTML,
-`Cfg` in the Swift) are kept 1:1 so adjusting one is easy to mirror.
+Tunables live in the `Cfg` struct at the top of `MatrixView.swift` — glyph cell
+size, fall speed, trail fade, and the logo size/alpha are all there.
 
 ## Solarized Dark palette
 
@@ -31,33 +31,68 @@ base3   #eee8d5   bright head glyph orange  #cb4b16
 Column glyphs cycle through cyan → blue → green → violet → yellow; the leading
 "head" glyph is base3 (`#eee8d5`) for the classic bright-tip matrix look.
 
-## Building the .saver (Xcode required)
+## Installing the pre-built release
 
-1. Xcode → **File ▸ New ▸ Project ▸ macOS ▸ Screen Saver** → name it `SolarizedMatrix`.
-2. Delete the generated `*.swift` view file; add `MatrixView.swift`.
-3. In `Info.plist`, set **Principal class** (`NSPrincipalClass`) to `$(PRODUCT_MODULE_NAME).MatrixView`.
-4. Build (⌘B). Product is `SolarizedMatrix.saver` under `~/Library/Developer/Xcode/DerivedData/.../Build/Products/`.
-5. Double-click the `.saver` to install, or copy it to `~/Library/Screen Savers/`.
-6. System Settings ▸ Screen Saver → pick **SolarizedMatrix**.
+Download `SolarizedMatrix.saver.zip`, unzip, then double-click `SolarizedMatrix.saver` to install.
 
-Note: macOS runs modern screensavers out of process (`legacyScreenSaver`). If a
-build doesn't refresh, log out/in or run `killall legacyScreenSaver`.
+**"App is damaged" / Gatekeeper warning?**  
+macOS tags files downloaded from the internet with a quarantine attribute and blocks unsigned bundles. Fix it with one command after installing:
 
-## Open design choices (decide in code mode)
+```bash
+xattr -cr ~/Library/Screen\ Savers/SolarizedMatrix.saver
+```
+
+Then open System Settings ▸ Screen Saver and pick **SolarizedMatrix**.
+
+**Prefer to avoid the workaround?** Clone the repo and build it yourself (see section below) — locally-built bundles are never quarantined.
+
+---
+
+## Building the .saver (no Xcode required)
+
+The bundle skeleton lives in `build/SolarizedMatrix.saver/`. Compile the binary
+with `swiftc`, ad-hoc sign, and install:
+
+```bash
+mkdir -p build/SolarizedMatrix.saver/Contents/MacOS
+
+swiftc MatrixView.swift \
+  -module-name SolarizedMatrix \
+  -emit-library -Xlinker -bundle \
+  -o build/SolarizedMatrix.saver/Contents/MacOS/SolarizedMatrix \
+  -framework ScreenSaver -framework AppKit -framework Foundation \
+  -target arm64-apple-macosx13.0
+
+codesign -s - build/SolarizedMatrix.saver
+
+cp -r build/SolarizedMatrix.saver ~/Library/Screen\ Savers/
+killall legacyScreenSaver 2>/dev/null; killall ScreenSaverEngine 2>/dev/null
+```
+
+Verify the output is a **bundle**, not a dylib — macOS will refuse to run a
+screensaver built as a shared library:
+
+```bash
+file build/SolarizedMatrix.saver/Contents/MacOS/SolarizedMatrix
+# → Mach-O 64-bit bundle arm64
+```
+
+### Activating (macOS 26 Tahoe)
+
+Screen Saver settings moved: **System Settings → Wallpaper → Screen Saver… → toggle to Custom** → select **SolarizedMatrix**.
+
+On earlier macOS versions: **System Settings → Screen Saver**.
+
+Note: macOS runs screensavers out of process (`legacyScreenSaver`). If a build
+doesn't refresh, log out/in or run `killall legacyScreenSaver`.
+
+### Xcode (optional)
+
+If you prefer an Xcode project: **File ▸ New ▸ Project ▸ macOS ▸ Screen Saver** → name it `SolarizedMatrix`, replace the generated view with `MatrixView.swift`, set **Principal class** to `SolarizedMatrix.MatrixView`, and build.
+
+## Open design choices
 
 - **Glyphs**: currently katakana + code symbols mixed. Switch to pure katakana or pure code by editing the glyph set.
-- **Brutalist overlay**: the HTML has a hard border frame, big mono wordmark, clock, and scanlines. The Swift starter renders rain only — porting the overlay (text + frame + scanlines) is the natural next step.
+- **Brutalist overlay**: a hard border frame, big mono wordmark, clock, and scanlines would round out the look. The Swift port renders rain + logo ghost rain only — adding the overlay (text + frame + scanlines) is the natural next step.
 - **Config sheet**: `hasConfigureSheet` is `false`. Add a sheet to expose speed/colors at runtime if wanted.
 - **Multi-display**: ScreenSaverView handles this, but test per-monitor sizing.
-
-## Prompt to paste into code mode
-
-> I'm building a macOS screensaver: a Solarized-dark, brutalist, matrix-rain
-> effect. `preview.html` is the visual source of truth and `MatrixView.swift`
-> is a starter `ScreenSaverView` port (tunables mirror the HTML's `CFG`).
-> Please: (1) scaffold an Xcode Screen Saver project named `SolarizedMatrix`
-> wired to `MatrixView` as the principal class, (2) port the brutalist overlay
-> from `preview.html` (border frame, large mono "MATRIX / SOLARIZED // DARK"
-> wordmark, live clock, scanlines) into the Swift view, (3) build with
-> `xcodebuild`, install to `~/Library/Screen Savers/`, and help me preview it.
-> Keep the katakana+code glyph mix and the bright base3 head glyph.

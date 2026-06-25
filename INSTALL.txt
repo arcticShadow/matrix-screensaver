@@ -1,0 +1,20 @@
+INSTALL — SolarizedMatrix Screensaver
+======================================
+
+1. Double-click SolarizedMatrix.saver (inside the build/ folder).
+   macOS will ask whether to install for the current user — click OK.
+
+2. If you see "App is damaged and can't be opened":
+   macOS Gatekeeper blocks unsigned bundles downloaded from the internet.
+   Run this command in Terminal after installing:
+
+       xattr -cr ~/Library/Screen\ Savers/SolarizedMatrix.saver
+
+   Then reopen System Settings ▸ Screen Saver.
+
+3. Pick SolarizedMatrix in the list and you're done.
+
+ALTERNATIVE — build from source (no workaround needed):
+   Clone https://github.com/arcticShadow/matrix-screensaver and follow
+   the "Building the .saver" steps in README.md. Locally-built bundles
+   are never quarantined by Gatekeeper.
