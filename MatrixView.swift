@@ -103,6 +103,16 @@ final class MatrixView: ScreenSaverView {
     private var colHead:    [String]  = []
     private var colResetAt: [CGFloat] = []   // row at which this drop resets
     private var didInit = false
+    private var dismissed = false
+    private var ssObservers: [NSObjectProtocol] = []
+
+    // Cached draw attributes. A font lookup plus an attributes dictionary per
+    // glyph cost a few thousand allocations a frame; body/head dictionaries only
+    // change when a column resets, so build them once and reuse.
+    private lazy var font: NSFont = NSFont(name: "SF Mono", size: Cfg.fontSize)
+        ?? NSFont.monospacedSystemFont(ofSize: Cfg.fontSize, weight: .semibold)
+    private var colBodyAttrs: [[NSAttributedString.Key: Any]] = []
+    private var colHeadAttrs: [[NSAttributedString.Key: Any]] = []
 
     // MARK: - Logo "ghost" rain state
     // A second rain stream, drawn only where it falls inside the logo shape.
@@ -118,6 +128,7 @@ final class MatrixView: ScreenSaverView {
     override init?(frame: NSRect, isPreview: Bool) {
         super.init(frame: frame, isPreview: isPreview)
         animationTimeInterval = 1.0 / 30.0
+        observeScreenSaverState()
     }
     required init?(coder: NSCoder) { super.init(coder: coder) }
 
@@ -153,15 +164,64 @@ final class MatrixView: ScreenSaverView {
         logoDrops   = (0..<cols).map { _ in (0..<Cfg.logoStreams).map { _ in CGFloat.random(in: 0...rows) } }
         logoColChar = (0..<cols).map { _ in (0..<Cfg.logoStreams).map { _ in rc() } }
 
+        colBodyAttrs = (0..<cols).map { attrs(colColor[$0], colAlpha[$0]) }
+        colHeadAttrs = (0..<cols).map { attrs(headColor, colAlpha[$0]) }
+
         buffer  = makeBuffer()
         buildLogoMask(bw: bounds.width, bh: bounds.height)
         didInit = true
     }
 
     override func startAnimation() { super.startAnimation() }
-    override func stopAnimation()  { super.stopAnimation() }
+
+    // Kept for hosts that honour it; macOS 26's legacyScreenSaver does not — see
+    // observeScreenSaverState() for the signal actually relied on.
+    override func stopAnimation() {
+        super.stopAnimation()
+        teardown()
+    }
+
+    private func teardown() {
+        buffer       = nil
+        drops        = []; colColor    = []; colAlpha     = []
+        colChar      = []; colHead     = []; colResetAt   = []
+        colBodyAttrs = []; colHeadAttrs = []
+        logoMask     = []; logoDrops   = []; logoColChar  = []
+        cols         = 0
+        didInit      = false
+    }
+
+    // stopAnimation() is frequently never delivered, and a dismissed saver's
+    // window is indistinguishable from a live one (isVisible stays true and
+    // occlusionState never reports .visible — it reads 8192 either way), so the
+    // host renders a saver nobody can see, indefinitely. The screensaver
+    // distributed notifications are the only reliable signal.
+    //
+    // Fail open: only a positive didstop stops the rain, so a missed
+    // notification costs CPU, never a blank screen.
+    private func observeScreenSaverState() {
+        let dnc = DistributedNotificationCenter.default()
+        ssObservers = [
+            dnc.addObserver(forName: .init("com.apple.screensaver.didstop"),
+                            object: nil, queue: .main) { [weak self] _ in
+                self?.dismissed = true
+                self?.teardown()
+            },
+            dnc.addObserver(forName: .init("com.apple.screensaver.didstart"),
+                            object: nil, queue: .main) { [weak self] _ in
+                self?.dismissed = false
+            },
+        ]
+    }
+
+    deinit {
+        let dnc = DistributedNotificationCenter.default()
+        ssObservers.forEach { dnc.removeObserver($0) }
+    }
 
     override func animateOneFrame() {
+        guard isPreview || !dismissed else { return }
+
         let needsSetup = !didInit
             || cols != Int(bounds.width / Cfg.fontSize)
             || buffer?.width  != Int(bounds.width)
@@ -172,6 +232,13 @@ final class MatrixView: ScreenSaverView {
 
     // MARK: - Frame
     override func draw(_ rect: NSRect) {
+        // Each frame allocates a full-screen CGImage plus thousands of text
+        // temporaries. Without an explicit pool they accumulate for the life of
+        // the hosting process, which outlives the saver.
+        autoreleasepool { drawFrame() }
+    }
+
+    private func drawFrame() {
         if !didInit { setup() }
         guard let buf = buffer,
               let screenCtx = NSGraphicsContext.current?.cgContext else { return }
@@ -198,8 +265,9 @@ final class MatrixView: ScreenSaverView {
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = bufNSCtx
 
-        let font = NSFont(name: "SF Mono", size: Cfg.fontSize)
-            ?? NSFont.monospacedSystemFont(ofSize: Cfg.fontSize, weight: .semibold)
+        // Only three distinct logo colours, but the envelope alpha changes every
+        // frame, so rebuild just these three rather than one per glyph.
+        let logoAttrs = logoStream.map { attrs($0, logoAlphaNow) }
 
         for i in 0..<cols {
             let x    = CGFloat(i) * Cfg.fontSize
@@ -207,10 +275,9 @@ final class MatrixView: ScreenSaverView {
 
             if Double.random(in: 0...1) > 0.92 { colChar[i] = rc() }
 
-            drawGlyph(colChar[i], at: CGPoint(x: x, y: yTop),
-                      color: colColor[i].withAlphaComponent(colAlpha[i]), font: font)
+            drawGlyph(colChar[i], at: CGPoint(x: x, y: yTop), attrs: colBodyAttrs[i])
             drawGlyph(colHead[i], at: CGPoint(x: x, y: yTop - Cfg.fontSize),
-                      color: headColor.withAlphaComponent(colAlpha[i]), font: font)
+                      attrs: colHeadAttrs[i])
 
             drops[i] += Cfg.fallMin + CGFloat.random(in: 0...(Cfg.fallMax - Cfg.fallMin))
 
@@ -221,6 +288,8 @@ final class MatrixView: ScreenSaverView {
                 colChar[i]    = rc()
                 colHead[i]    = rh()
                 colResetAt[i] = resetThreshold(bufH: bh)
+                colBodyAttrs[i] = attrs(colColor[i], colAlpha[i])
+                colHeadAttrs[i] = attrs(headColor, colAlpha[i])
             }
 
             // Logo "ghost" rain: advance a parallel drop and draw it only when
@@ -231,9 +300,8 @@ final class MatrixView: ScreenSaverView {
                     let logoRow = Int(logoDrops[i][k])
                     if logoAlphaNow > 0.01, logoRow >= 0, logoRow < logoMask[i].count, logoMask[i][logoRow] {
                         let lyTop = bh - logoDrops[i][k] * Cfg.fontSize
-                        let logoCol = logoStream[(i + k) % logoStream.count]
                         drawGlyph(logoColChar[i][k], at: CGPoint(x: x, y: lyTop),
-                                  color: logoCol.withAlphaComponent(logoAlphaNow), font: font)
+                                  attrs: logoAttrs[(i + k) % logoAttrs.count])
                         if Double.random(in: 0...1) > 0.88 { logoColChar[i][k] = rc() }
                     }
                     logoDrops[i][k] += (Cfg.fallMin + CGFloat.random(in: 0...(Cfg.fallMax - Cfg.fallMin))) * 0.9
@@ -301,8 +369,12 @@ final class MatrixView: ScreenSaverView {
         }
     }
 
-    private func drawGlyph(_ s: String, at p: CGPoint, color: NSColor, font: NSFont) {
-        s.draw(at: p, withAttributes: [.font: font, .foregroundColor: color])
+    private func attrs(_ color: NSColor, _ alpha: CGFloat) -> [NSAttributedString.Key: Any] {
+        [.font: font, .foregroundColor: color.withAlphaComponent(alpha)]
+    }
+
+    private func drawGlyph(_ s: String, at p: CGPoint, attrs: [NSAttributedString.Key: Any]) {
+        s.draw(at: p, withAttributes: attrs)
     }
 
     override var hasConfigureSheet: Bool { false }
