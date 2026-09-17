@@ -191,25 +191,29 @@ final class MatrixView: ScreenSaverView {
         didInit      = false
     }
 
-    // stopAnimation() is frequently never delivered, and a dismissed saver's
-    // window is indistinguishable from a live one (isVisible stays true and
-    // occlusionState never reports .visible — it reads 8192 either way), so the
-    // host renders a saver nobody can see, indefinitely. The screensaver
-    // distributed notifications are the only reliable signal.
+    // macOS 14+ (FB13041503) never calls stopAnimation() on a dismissed saver,
+    // never releases the view, and goes on calling animateOneFrame forever. The
+    // window gives nothing to test against: isVisible stays true and
+    // occlusionState reads 8192 whether displayed or dismissed.
     //
-    // Fail open: only a positive didstop stops the rain, so a missed
-    // notification costs CPU, never a blank screen.
+    // Each activation builds a fresh instance, but the host also calls
+    // startAnimation on the stale ones, so without this their render loops
+    // accumulate and run in parallel. didstop is therefore TERMINAL: an instance
+    // that has been dismissed never draws again, and the next activation's new
+    // instance does the drawing.
+    //
+    // Deliberately not exit(0), which the usual advice suggests: the host is
+    // respawned within seconds, and a host spawned outside a screensaver session
+    // never receives a didstop — so it animates forever. That trades one stuck
+    // render loop for an endless exit/respawn/burn cycle.
     private func observeScreenSaverState() {
         let dnc = DistributedNotificationCenter.default()
         ssObservers = [
             dnc.addObserver(forName: .init("com.apple.screensaver.didstop"),
                             object: nil, queue: .main) { [weak self] _ in
-                self?.dismissed = true
-                self?.teardown()
-            },
-            dnc.addObserver(forName: .init("com.apple.screensaver.didstart"),
-                            object: nil, queue: .main) { [weak self] _ in
-                self?.dismissed = false
+                guard let self, !self.isPreview else { return }
+                self.dismissed = true
+                self.teardown()
             },
         ]
     }
