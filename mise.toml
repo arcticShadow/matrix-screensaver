@@ -5,6 +5,8 @@
 #   mise run package    # build, then zip distributable -> SolarizedMatrix.saver.zip
 #   mise run install    # build, then install to ~/Library/Screen Savers and reload
 #   mise run clean      # remove the built bundle and the zip
+#   mise run test       # compile Diagnostics/ + Tests/ into build/tests and run (non-zero on failure)
+#   mise run snapshot   # render rain + overlay offscreen to PNGs in build/snapshot (no screensaver host)
 #
 # Cutting a release is driven by the `release` skill in .claude/skills/release/,
 # which calls these tasks to produce the artifact.
@@ -62,6 +64,23 @@ file "$macos/SolarizedMatrix" | grep -q "Mach-O 64-bit bundle" \
   || { echo "ERROR: $macos/SolarizedMatrix is not a Mach-O bundle"; exit 1; }
 
 echo "Built $bundle (v$SM_VERSION)"
+'''
+
+[tasks.test]
+description = "Compile the diagnostics core + plain swiftc test executable and run it"
+run = '''
+set -eu
+# The core must stay UI-free so the collector (and these tests) can link it.
+if grep -nE '^[[:space:]]*import[[:space:]]+(AppKit|ScreenSaver|Cocoa|SwiftUI)' Diagnostics/*.swift; then
+  echo "ERROR: Diagnostics/ must not import AppKit/ScreenSaver"; exit 1
+fi
+mkdir -p build/tests
+rm -rf build/test-tmp
+swiftc Diagnostics/*.swift Tests/*.swift \
+  -module-name DiagnosticsTests \
+  -o build/tests/DiagnosticsTests \
+  -target arm64-apple-macosx13.0
+./build/tests/DiagnosticsTests
 '''
 
 [tasks.package]
