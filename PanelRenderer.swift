@@ -132,6 +132,10 @@ final class PanelRenderer {
                 drawRule(ctx, x: left, y: top + rowH / 2, width: width, color: base01)
             case .section:
                 ("── " + line.label + " ──" as NSString).draw(at: p, withAttributes: sectionAttrs)
+                if !line.value.isEmpty {   // e.g. the staleness marker `·12s`, dim, right-aligned
+                    let x = p.x + CGFloat(style.columns - line.value.count) * cellW
+                    (line.value as NSString).draw(at: CGPoint(x: x, y: p.y), withAttributes: dotAttrs)
+                }
             case .text:
                 (line.label as NSString).draw(at: p, withAttributes: valueAttrs[line.severity] ?? labelAttrs)
             case .field:

@@ -11,6 +11,19 @@ final class FakeWorld {
     let home: String
     var now: Date
     var boot: Date
+
+    // Injected host readers. Each call counts, advances the fake clock by the
+    // configured fetch duration (a "fake fetch time"), then returns or throws.
+    var vitals = HostVitals(load: [0.42, 0.38, 0.31], memoryPressure: .normal, thermal: .nominal)
+    var vitalsDuration: TimeInterval = 0.001
+    var vitalsFail = false
+    var vitalsCalls = 0
+    var power: PowerStatus = .battery(percent: 87, onAC: false, charging: false)
+    var powerDuration: TimeInterval = 0.002
+    var powerFail = false
+    var powerCalls = 0
+    struct FakeFailure: Error {}
+
     init(_ name: String, now: Date = Date(timeIntervalSince1970: 1_795_271_405)) {
         home = makeTempDir(name)
         self.now = now
@@ -23,8 +36,21 @@ final class FakeWorld {
                                homeDirectory: home,
                                configPath: configPath,
                                bootTime: boot,
-                               timeZone: { TimeZone(identifier: "UTC")! })
+                               timeZone: { TimeZone(identifier: "UTC")! },
+                               readVitals: { [unowned self] in
+                                   self.vitalsCalls += 1
+                                   self.now = self.now.addingTimeInterval(self.vitalsDuration)
+                                   if self.vitalsFail { throw FakeFailure() }
+                                   return self.vitals
+                               },
+                               readPower: { [unowned self] in
+                                   self.powerCalls += 1
+                                   self.now = self.now.addingTimeInterval(self.powerDuration)
+                                   if self.powerFail { throw FakeFailure() }
+                                   return self.power
+                               })
     }
+    func advance(_ s: TimeInterval) { now = now.addingTimeInterval(s) }
 }
 
 func coreTests() {

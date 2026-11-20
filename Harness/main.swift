@@ -22,13 +22,30 @@ let scale: CGFloat = 2
 /// 2026-11-21 14:30:05 UTC; boot 4d 03:12 earlier.
 let t0 = Date(timeIntervalSince1970: 1_795_271_405)
 
-final class Clock { var now = t0 }
+/// Fake clock + fetch counter. Thread-safe: the shared poller reads the clock
+/// and calls the readers on its background queue.
+final class Clock {
+    private let lock = NSLock()
+    private var t = t0
+    private var fetches = 0
+    var now: Date { lock.lock(); defer { lock.unlock() }; return t }
+    func advance(_ s: TimeInterval) { lock.lock(); t = t.addingTimeInterval(s); lock.unlock() }
+    var vitalsFetches: Int { lock.lock(); defer { lock.unlock() }; return fetches }
+    func countFetch() -> Int { lock.lock(); defer { lock.unlock() }; fetches += 1; return fetches }
+}
 
 struct Scenario {
     var name: String
     var isPreview = false
     var mainDisplay = true
     var configJSON: String? = nil
+    var debugLines = false
+    var power: PowerStatus = .battery(percent: 87, onAC: false, charging: false)
+    var thermal: HostVitals.Thermal = .nominal
+    /// Vitals fail after the first fetch (drives the staleness marker).
+    var vitalsFailAfterFirst = false
+    /// Fake seconds per frame (larger = data ages faster).
+    var clockStep: TimeInterval = 1.0 / 30.0
 }
 
 let scenarios = [
@@ -36,6 +53,10 @@ let scenarios = [
     Scenario(name: "overlay-off", configJSON: #"{ "overlay": false }"#),
     Scenario(name: "preview", isPreview: true),
     Scenario(name: "secondary-display", mainDisplay: false),
+    Scenario(name: "overlay-debug", debugLines: true, power: .battery(percent: 64, onAC: true, charging: true),
+             thermal: .serious),
+    Scenario(name: "overlay-stale", debugLines: true, vitalsFailAfterFirst: true, clockStep: 0.2),
+    Scenario(name: "overlay-desktop", power: .noBattery),
 ]
 
 func makeWorld(_ s: Scenario, clock: Clock) -> DiagnosticsEnvironment {
@@ -48,22 +69,30 @@ func makeWorld(_ s: Scenario, clock: Clock) -> DiagnosticsEnvironment {
                                                  withIntermediateDirectories: true)
         try? json.write(toFile: cfg, atomically: true, encoding: .utf8)
     }
+    let thermal = s.thermal, power = s.power, failAfterFirst = s.vitalsFailAfterFirst
     return DiagnosticsEnvironment(now: { clock.now },
                                   homeDirectory: home,
                                   configPath: cfg,
                                   bootTime: t0.addingTimeInterval(-(4 * 86400 + 3 * 3600 + 12 * 60)),
-                                  timeZone: { TimeZone(identifier: "UTC")! })
+                                  timeZone: { TimeZone(identifier: "UTC")! },
+                                  readVitals: {
+                                      if clock.countFetch() > 1, failAfterFirst {
+                                          throw ReaderError(description: "fake failure")
+                                      }
+                                      return HostVitals(load: [1.84, 1.52, 1.37], memoryPressure: .normal,
+                                                        thermal: thermal)
+                                  },
+                                  readPower: { power })
 }
 
-func render(_ s: Scenario) throws -> String {
-    let clock = Clock()
-    let env = makeWorld(s, clock: clock)
-    guard let view = MatrixView(frame: NSRect(origin: .zero, size: size),
-                                isPreview: s.isPreview, environment: env) else {
-        throw NSError(domain: "harness", code: 1)
-    }
-    view.displayRoleOverride = s.mainDisplay
+/// Wait (real time) for the background poller to catch up.
+func waitFor(_ timeout: TimeInterval = 2, _ cond: () -> Bool) -> Bool {
+    let end = Date().addingTimeInterval(timeout)
+    while Date() < end { if cond() { return true }; Thread.sleep(forTimeInterval: 0.005) }
+    return cond()
+}
 
+func makeContext() throws -> (NSBitmapImageRep, NSGraphicsContext) {
     guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil,
                                      pixelsWide: Int(size.width * scale),
                                      pixelsHigh: Int(size.height * scale),
@@ -73,18 +102,35 @@ func render(_ s: Scenario) throws -> String {
         throw NSError(domain: "harness", code: 2)
     }
     rep.size = size   // points -> 2x pixels, like a Retina screen (set BEFORE making the context)
-    guard let ctx = NSGraphicsContext(bitmapImageRep: rep) else {
-        throw NSError(domain: "harness", code: 2)
+    guard let ctx = NSGraphicsContext(bitmapImageRep: rep) else { throw NSError(domain: "harness", code: 2) }
+    return (rep, ctx)
+}
+
+func render(_ s: Scenario) throws -> String {
+    let clock = Clock()
+    let env = makeWorld(s, clock: clock)
+    let hub = PollerHub(tickInterval: 0.01)
+    guard let view = MatrixView(frame: NSRect(origin: .zero, size: size),
+                                isPreview: s.isPreview, environment: env,
+                                pollerHub: hub, debugLines: s.debugLines) else {
+        throw NSError(domain: "harness", code: 1)
     }
+    view.displayRoleOverride = s.mainDisplay
+    let (rep, ctx) = try makeContext()
 
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = ctx
-    for _ in 0..<frames {
+    for i in 0..<frames {
         view.animateOneFrame()
+        // Let the first fetch land before frame 1 so snapshots are deterministic.
+        if i == 0, view.isPolling { _ = waitFor { clock.vitalsFetches > 0 } ; Thread.sleep(forTimeInterval: 0.02) }
         view.draw(view.bounds)
-        clock.now = clock.now.addingTimeInterval(1.0 / 30.0)
+        clock.advance(s.clockStep)
+        if s.clockStep > 0.1 { Thread.sleep(forTimeInterval: 0.002) }   // give the poller turns
     }
     NSGraphicsContext.restoreGraphicsState()
+    view.stopAnimation()
+    if hub.isRunning { throw NSError(domain: "harness: poller still running after stopAnimation", code: 4) }
 
     let path = "\(outDir)/\(s.name).png"
     guard let png = rep.representation(using: .png, properties: [:]) else {
@@ -94,8 +140,75 @@ func render(_ s: Scenario) throws -> String {
     return path
 }
 
+/// Two overlay views (e.g. two main-role instances) on one hub: one poller,
+/// one fetch stream; tearing both down stops it and fetching stops.
+func sharedPollerCheck() throws {
+    let clock = Clock()
+    let env = makeWorld(Scenario(name: "shared"), clock: clock)
+    let hub = PollerHub(tickInterval: 0.01)
+    let views = (0..<2).compactMap { _ in
+        MatrixView(frame: NSRect(origin: .zero, size: size), isPreview: false, environment: env, pollerHub: hub)
+    }
+    views.forEach { $0.displayRoleOverride = true; $0.animateOneFrame() }
+    let ok1 = hub.starts == 1 && hub.activeLeases == 2 && hub.isRunning
+    _ = waitFor { clock.vitalsFetches >= 1 }
+    for _ in 0..<20 { clock.advance(1); Thread.sleep(forTimeInterval: 0.01) }   // 20 fake s -> ~4 more vitals fetches
+    _ = waitFor { clock.vitalsFetches >= 5 }
+    let during = clock.vitalsFetches
+    views[0].stopAnimation()
+    let ok2 = hub.isRunning && hub.activeLeases == 1
+    views[1].stopAnimation()
+    let ok3 = !hub.isRunning && hub.activeLeases == 0
+    let frozen = clock.vitalsFetches
+    for _ in 0..<20 { clock.advance(5); Thread.sleep(forTimeInterval: 0.01) }
+    let ok4 = clock.vitalsFetches == frozen
+    print("shared poller: starts=\(hub.starts) leases-with-2-views ok=\(ok1) fetches(20s,2 views)=\(during) one-stopped-still-running=\(ok2) all-stopped=\(ok3) fetches-after-teardown-frozen=\(ok4)")
+    guard ok1, ok2, ok3, ok4, during <= 6 else { throw NSError(domain: "harness: shared poller check failed", code: 5) }
+}
+
+/// Draw-time percentiles with the poller idle vs. with a deliberately slow
+/// (40 ms, CPU-burning) vitals fetch running on the background queue every frame.
+func frameTimeCheck() throws {
+    func run(_ name: String, slow: Bool) throws -> (Double, Double, Int) {
+        let clock = Clock()
+        var env = makeWorld(Scenario(name: "timing-\(name)"), clock: clock)
+        if slow {
+            env.readVitals = {
+                _ = clock.countFetch()
+                let end = Date().addingTimeInterval(0.04)
+                var x = 0.0; while Date() < end { x += sin(x) }   // burn CPU, not just sleep
+                return HostVitals(load: [x.isNaN ? 0 : 1, 1, 1], memoryPressure: .normal, thermal: .nominal)
+            }
+        }
+        let hub = PollerHub(tickInterval: 0.01)
+        guard let view = MatrixView(frame: NSRect(origin: .zero, size: size), isPreview: false,
+                                    environment: env, pollerHub: hub) else { throw NSError(domain: "harness", code: 1) }
+        view.displayRoleOverride = true
+        let (_, ctx) = try makeContext()
+        NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = ctx
+        var times: [Double] = []
+        for i in 0..<400 {
+            view.animateOneFrame()
+            let t = DispatchTime.now().uptimeNanoseconds
+            view.draw(view.bounds)
+            if i >= 50 { times.append(Double(DispatchTime.now().uptimeNanoseconds - t) / 1e6) }
+            clock.advance(1)   // vitals due every frame-ish (throttled to 20 x its measured duration)
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        view.stopAnimation()
+        times.sort()
+        return (times[times.count / 2], times[Int(Double(times.count) * 0.99)], clock.vitalsFetches)
+    }
+    let idle = try run("idle", slow: false)
+    let busy = try run("busy", slow: true)
+    print(String(format: "frame time (ms): fast fetch p50=%.2f p99=%.2f fetches=%d | slow 40ms fetch p50=%.2f p99=%.2f fetches=%d",
+                 idle.0, idle.1, idle.2, busy.0, busy.1, busy.2))
+}
+
 try FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
 for s in scenarios {
     let path = try autoreleasepool { try render(s) }
     print("wrote \(path)")
 }
+try autoreleasepool { try sharedPollerCheck() }
+if ProcessInfo.processInfo.environment["TIMING"] == "1" { try autoreleasepool { try frameTimeCheck() } }

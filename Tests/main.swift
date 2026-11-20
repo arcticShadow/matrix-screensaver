@@ -6,4 +6,6 @@
 configTests()
 sysPanelTests()
 coreTests()
+pollerTests()
+hubTests()
 TestKit.finish()

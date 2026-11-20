@@ -17,6 +17,10 @@ struct DiagnosticsEnvironment {
     var configPath: String
     var bootTime: Date
     var timeZone: () -> TimeZone
+    /// Host vitals and power readers. Called on the poller's background
+    /// queue. Default to the live readers; tests and the harness inject fakes.
+    var readVitals: () throws -> HostVitals = HostReaders.vitals
+    var readPower: () throws -> PowerStatus = HostReaders.power
 
     static func live() -> DiagnosticsEnvironment {
         let home = realHomeDirectory()

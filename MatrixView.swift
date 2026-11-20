@@ -46,6 +46,13 @@ final class MatrixView: ScreenSaverView {
         static let overlayFontSize: CGFloat = 15
         static let overlayColumns:  Int     = 34     // panel width in monospace cells
         static let overlayMargin:   CGFloat = 48     // inset from the screen edge, points
+        // Hidden debug lines: per-source fetch time and effective poll interval.
+        // (Always on in SM_FRAME_DUMP real-host verification builds.)
+        #if SM_FRAME_DUMP
+        static let overlayDebug:    Bool    = true
+        #else
+        static let overlayDebug:    Bool    = false
+        #endif
     }
 
     // MARK: - Solarized palette
@@ -116,6 +123,7 @@ final class MatrixView: ScreenSaverView {
     // The UI-free core (Diagnostics/) builds panel models; PanelRenderer draws
     // them. No core at all in the System Settings preview.
     private var diagnostics: DiagnosticsCore?
+    private var pollerHub: PollerHub?
     private var panelRenderer: PanelRenderer?
     /// Decided in setup(): not preview, main display, and config `overlay` on.
     private var overlayActive = false
@@ -147,11 +155,17 @@ final class MatrixView: ScreenSaverView {
     }
 
     /// `environment` injects a fake diagnostics environment (render harness);
-    /// nil means the live one.
-    init?(frame: NSRect, isPreview: Bool, environment: DiagnosticsEnvironment?) {
+    /// nil means the live one. `pollerHub` is the background poller shared by
+    /// every view in the process (the harness may pass its own).
+    init?(frame: NSRect, isPreview: Bool, environment: DiagnosticsEnvironment?,
+          pollerHub: PollerHub = .shared, debugLines: Bool = Cfg.overlayDebug) {
         super.init(frame: frame, isPreview: isPreview)
         animationTimeInterval = 1.0 / 30.0
-        if !isPreview { diagnostics = DiagnosticsCore(env: environment ?? .live()) }
+        if !isPreview {
+            self.pollerHub = pollerHub
+            diagnostics = DiagnosticsCore(env: environment ?? .live(),
+                                          polling: .shared(pollerHub), showDebug: debugLines)
+        }
         observeScreenSaverState()
     }
     required init?(coder: NSCoder) { super.init(coder: coder) }
@@ -215,6 +229,9 @@ final class MatrixView: ScreenSaverView {
             panelRenderer = PanelRenderer(style: .init(fontSize: Cfg.overlayFontSize,
                                                        columns: Cfg.overlayColumns))
         }
+        // Only a view that shows the overlay holds a lease on the shared poller.
+        if overlayActive { diagnostics?.startPolling() } else { diagnostics?.stopPolling() }
+        logPoller("decide")
         let status = diagnostics.map { "\($0.configStatus)" } ?? "none"
         Self.log.notice("overlay=\(self.overlayActive, privacy: .public) preview=\(self.isPreview, privacy: .public) main=\(main, privacy: .public) config=\(status, privacy: .public) size=\(Int(self.bounds.width), privacy: .public)x\(Int(self.bounds.height), privacy: .public)")
     }
@@ -240,6 +257,10 @@ final class MatrixView: ScreenSaverView {
         colBodyAttrs = []; colHeadAttrs = []
         logoMask     = []; logoDrops   = []; logoColChar  = []
         panelRenderer = nil; overlayActive = false
+        if diagnostics?.isPolling == true {
+            diagnostics?.stopPolling()   // last view out stops the shared poller
+            logPoller("teardown")
+        }
         cols         = 0
         didInit      = false
     }
@@ -270,6 +291,14 @@ final class MatrixView: ScreenSaverView {
             },
         ]
     }
+
+    private func logPoller(_ event: String) {
+        guard let hub = pollerHub else { return }
+        Self.log.notice("poller \(event, privacy: .public) leased=\(self.isPolling, privacy: .public) running=\(hub.isRunning, privacy: .public) leases=\(hub.activeLeases, privacy: .public) starts=\(hub.starts, privacy: .public)")
+    }
+
+    /// Harness/diagnostics: whether this view currently leases the poller.
+    var isPolling: Bool { diagnostics?.isPolling ?? false }
 
     deinit {
         let dnc = DistributedNotificationCenter.default()
@@ -307,6 +336,19 @@ final class MatrixView: ScreenSaverView {
         let ok = (try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))) != nil
         Self.log.notice("frame dump \(name, privacy: .public) ok=\(ok, privacy: .public)")
     }
+
+    // Draw-time stats over the last window of frames, logged with each dump
+    // window: lets the real host show whether polling makes the rain stutter.
+    private var drawTimes: [UInt64] = []
+    private func recordDrawTime(_ ns: UInt64) {
+        guard !dismissed else { return }
+        drawTimes.append(ns)
+        guard drawTimes.count >= 300 else { return }
+        let sorted = drawTimes.sorted()
+        let ms = { (q: Double) in Double(sorted[min(sorted.count - 1, Int(Double(sorted.count) * q))]) / 1e6 }
+        Self.log.notice("draw ms p50=\(ms(0.5), privacy: .public) p99=\(ms(0.99), privacy: .public) max=\(ms(1.0), privacy: .public) n=\(sorted.count, privacy: .public) polling=\(self.isPolling, privacy: .public)")
+        drawTimes.removeAll(keepingCapacity: true)
+    }
     #endif
 
     // MARK: - Frame
@@ -314,7 +356,13 @@ final class MatrixView: ScreenSaverView {
         // Each frame allocates a full-screen CGImage plus thousands of text
         // temporaries. Without an explicit pool they accumulate for the life of
         // the hosting process, which outlives the saver.
+        #if SM_FRAME_DUMP
+        let t0 = DispatchTime.now().uptimeNanoseconds
         autoreleasepool { drawFrame() }
+        recordDrawTime(DispatchTime.now().uptimeNanoseconds - t0)
+        #else
+        autoreleasepool { drawFrame() }
+        #endif
     }
 
     private func drawFrame() {

@@ -3,13 +3,20 @@
 //  The facade the renderer talks to. One instance per saver activation: it
 //  loads config once at creation (each activation builds a fresh MatrixView,
 //  so editing the config takes effect at the next activation) and builds the
-//  panel models on demand, every frame.
+//  panel models on demand, every frame, from the clock plus the latest
+//  immutable poller snapshot.
 //
-//  Later tickets: a shared background poller feeds immutable snapshots in;
-//  panels() stays a cheap, pure read of the latest snapshot plus the clock.
+//  Polling: `.shared(hub)` (the saver) leases the process-wide background
+//  poller between startPolling() and stopPolling(); `.manual` (tests) owns a
+//  PollEngine that only runs when pollNow() is called, on the caller's thread.
 //
 
 import Foundation
+
+enum PollingMode {
+    case manual
+    case shared(PollerHub)
+}
 
 final class DiagnosticsCore {
     let env: DiagnosticsEnvironment
@@ -17,21 +24,86 @@ final class DiagnosticsCore {
     let configStatus: ConfigStatus
     /// Start of this saver activation (for SAVER.UPTIME).
     let saverStart: Date
+    /// Show the per-source fetch-time debug lines.
+    let showDebug: Bool
 
-    init(env: DiagnosticsEnvironment) {
+    private let mode: PollingMode
+    private var manualEngine: PollEngine?
+    private var lease: PollerLease?
+
+    init(env: DiagnosticsEnvironment, polling: PollingMode = .shared(.shared), showDebug: Bool = false) {
         self.env = env
         let loaded = ConfigLoader.load(path: env.configPath)
         config = loaded.config
         configStatus = loaded.status
         saverStart = env.now()
+        self.showDebug = showDebug
+        mode = polling
+        if case .manual = polling {
+            manualEngine = PollEngine(sources: PollSources.standard(env), clock: env.now)
+        }
     }
 
+    deinit { lease?.release() }
+
     var overlayEnabled: Bool { config.overlay }
+
+    // MARK: Polling lifecycle
+
+    /// Lease the shared poller (idempotent). No-op when the overlay is off.
+    func startPolling() {
+        guard overlayEnabled, lease == nil, case let .shared(hub) = mode else { return }
+        let env = self.env
+        lease = hub.acquire { PollEngine(sources: PollSources.standard(env), clock: env.now) }
+    }
+
+    /// Release the shared poller (idempotent). The hub stops polling when the
+    /// last lease goes.
+    func stopPolling() {
+        lease?.release()
+        lease = nil
+    }
+
+    var isPolling: Bool { lease != nil }
+
+    /// Manual mode: run every due source now, synchronously.
+    func pollNow() { manualEngine?.tick() }
+
+    private func snapshot() -> DiagSnapshot {
+        switch mode {
+        case .manual: return manualEngine?.snapshot ?? DiagSnapshot()
+        case let .shared(hub): return lease == nil ? DiagSnapshot() : hub.snapshot()
+        }
+    }
+
+    // MARK: Panels
 
     /// Panels to draw this frame, in display order. Empty when the overlay is off.
     func panels() -> [Panel] {
         guard overlayEnabled else { return [] }
-        return [SysPanel.build(SysInputs(now: env.now(), bootTime: env.bootTime,
-                                         saverStart: saverStart, timeZone: env.timeZone()))]
+        let now = env.now()
+        let snap = snapshot()
+        var inp = SysInputs(now: now, bootTime: env.bootTime,
+                            saverStart: saverStart, timeZone: env.timeZone())
+        inp.vitals = section(snap.vitals, SourceIDs.vitals, snap, now)
+        inp.power = section(snap.power, SourceIDs.power, snap, now)
+        inp.flavour = Flavour.lines(now: now)
+        if showDebug {
+            inp.debug = PollSources.order.compactMap { id in
+                snap.schedules[id].map { SourceStat(id: id, schedule: $0) }
+            }
+        }
+        return [SysPanel.build(inp)]
+    }
+
+    private func section<T>(_ sample: Sample<T>?, _ id: SourceID,
+                            _ snap: DiagSnapshot, _ now: Date) -> SectionData<T> {
+        let sched = snap.schedules[id]
+        var d = SectionData<T>(value: sample?.value)
+        if let s = sched, s.isStale(now: now), let age = s.dataAge(now: now) {
+            d.staleMarker = SysPanel.staleMarker(age: age)
+        }
+        if sample == nil, (sched?.consecutiveFailures ?? 0) > 0 { d.placeholder = "NO SIGNAL" }
+        return d
     }
 }

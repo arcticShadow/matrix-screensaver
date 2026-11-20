@@ -43,8 +43,10 @@ struct PanelLine: Equatable {
     static func field(_ label: String, _ value: String, _ severity: Severity = .normal) -> PanelLine {
         PanelLine(style: .field, label: label, value: value, severity: severity)
     }
-    static func section(_ label: String) -> PanelLine {
-        PanelLine(style: .section, label: label, value: "", severity: .normal)
+    /// A section heading; `marker` (e.g. the staleness marker `·12s`) is
+    /// drawn dim at the right edge.
+    static func section(_ label: String, marker: String? = nil) -> PanelLine {
+        PanelLine(style: .section, label: label, value: marker ?? "", severity: marker == nil ? .normal : .dim)
     }
     static let rule = PanelLine(style: .rule, label: "", value: "", severity: .normal)
     static func text(_ label: String, _ severity: Severity = .normal) -> PanelLine {

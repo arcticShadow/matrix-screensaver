@@ -15,7 +15,11 @@
 | `Diagnostics/Config.swift` | `ConfigLoader` / `DiagConfig` for `~/.config/matrix-diag/config.json`. |
 | `Diagnostics/PanelModel.swift` | `Panel` / `PanelLine` / `Severity` / `LineStyle` value types. |
 | `Diagnostics/SysPanel.swift` | Pure builder for the SYS panel. One file per panel/source. |
-| `Diagnostics/DiagnosticsCore.swift` | Facade the renderer calls: loads config, `panels()` per frame. |
+| `Diagnostics/DiagnosticsCore.swift` | Facade the renderer calls: loads config, leases the poller (`startPolling`/`stopPolling`), `panels()` per frame from the clock + latest snapshot. `.manual` polling mode for tests (`pollNow()`). |
+| `Diagnostics/Schedule.swift` | `SourceSchedule`: the pure, Codable adaptive scheduling policy (base, throttle, backoff, staleness). Shared with the collector. |
+| `Diagnostics/Poller.swift` | `DiagSnapshot`, the source registry (`PollSources.standard`), `PollEngine` (single-threaded tick), `PollerHub` (the one shared background poller, lease-counted). |
+| `Diagnostics/HostReaders.swift` | `HostVitals` / `PowerStatus` and the live readers (getloadavg, memory-pressure sysctl, thermal state, IOKit power sources). |
+| `Diagnostics/Flavour.swift` | Clock-driven atmosphere lines (scrolling hex, status readout). |
 | `Tests/` | Plain `swiftc` test executable (`main.swift` lists suites, `TestKit.swift` assertion helper, one `*Tests.swift` per seam). |
 | `Harness/main.swift` | Offscreen render harness: real MatrixView + fake environment -> PNGs. |
 | `mise.toml` | `build`, `test`, `snapshot`, `install`, `package`, `preview`, `clean` tasks. **Authoritative build commands.** |
@@ -27,7 +31,7 @@
 ```bash
 mise run test       # swiftc Diagnostics/*.swift Tests/*.swift -> build/tests/DiagnosticsTests, run it (non-zero on failure)
 mise run build      # swiftc MatrixView.swift PanelRenderer.swift Diagnostics/*.swift -> Mach-O bundle, ad-hoc signed
-mise run snapshot   # offscreen render to build/snapshot/*.png (overlay, overlay-off, preview, secondary-display)
+mise run snapshot   # offscreen render to build/snapshot/*.png (+ overlay-debug/-stale/-desktop) and a shared-poller/teardown check; TIMING=1 adds a frame-time check
 mise run install    # build + copy to ~/Library/Screen Savers + kill the hosts so they reload
 ```
 
@@ -63,9 +67,12 @@ This explicit buffer is necessary because `ScreenSaverView.draw()` does not guar
 - Active when: not `isPreview` (no `DiagnosticsCore` is even created in preview), main display, and config `overlay` is not `false`. Decided in `setup()` and on `viewDidMoveToWindow`, logged once per decision: `log show --predicate 'subsystem == "law.jude.SolarizedMatrix"'`.
 - Main display = the view's `window.screen` display ID equals `CGMainDisplayID()` (the menu-bar display, `NSScreen.screens.first`). No window/screen yet → main only if there is one screen. The harness forces it via `displayRoleOverride`.
 - Config is loaded once per `DiagnosticsCore`, i.e. once per saver activation (each activation builds a fresh `MatrixView`).
+- Polling: one `PollerHub.shared` per process runs every source on a background queue (utility QoS, 0.25 s tick checks which sources are due) and publishes an immutable `DiagSnapshot`; the render thread only copies it under a lock. A view leases the hub only while its overlay is active (`decideOverlay`) and releases in `teardown()` (so terminal `didstop` and `stopAnimation` both stop it); the first lease starts the timer, the last release cancels it and drops the engine. The engine/readers come from the first lease's environment.
+- Scheduling (`SourceSchedule`): effective interval = `max(base, 20 × last fetch)`; failures back off `base × 2^n` capped at `10 × base`; a section shows a dim `·12s` marker once its data is older than `2 × max(base, 20 × last fetch)` (backoff deliberately excluded, so failing sources show staleness). Bases: vitals 5 s, power 60 s.
+- Adding a source: see the header comment in `Diagnostics/Poller.swift` (reader in `DiagnosticsEnvironment`, slot in `DiagSnapshot`, one `.make(...)` line in `PollSources.standard` + `order`, its panel lines).
 - Real home comes from `getpwuid(getuid())`; the sandboxed host's `NSHomeDirectory()` is its container. The sandboxed host *can* read `~/.config/matrix-diag/config.json` (verified).
-- Keep the dismissal guarantees: `autoreleasepool` in `draw`, cached attrs (renderer caches its own), terminal `didstop`, `teardown()` releases buffers and the renderer.
-- Real-host check without screen capture (the session is locked while the saver runs): `SM_SWIFT_FLAGS="-D SM_FRAME_DUMP" mise run install` makes the saver write `SolarizedMatrix-frame-<pid>-main-150.png` into its container's `Data/tmp` (`~/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/Data/tmp/`). Reinstall without the flag afterwards.
+- Keep the dismissal guarantees: `autoreleasepool` in `draw`, cached attrs (renderer caches its own), terminal `didstop`, `teardown()` releases buffers, the renderer and the poller lease.
+- Real-host check without screen capture (the session is locked while the saver runs): `SM_SWIFT_FLAGS="-D SM_FRAME_DUMP" mise run install` makes the saver write `SolarizedMatrix-frame-<pid>-main-150.png` into its container's `Data/tmp` (`~/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/Data/tmp/`). Reinstall without the flag afterwards. That build also logs `draw ms p50=… p99=… max=… polling=…` every 300 frames and `poller decide/teardown leased=… running=… leases=… starts=…`.
 
 ## Key tunables (`Cfg` in `MatrixView.swift`)
 
@@ -77,6 +84,7 @@ This explicit buffer is necessary because `ScreenSaverView.draw()` does not guar
 | `overlayFontSize` | `15` | Overlay text size (points) |
 | `overlayColumns` | `34` | Overlay panel width in monospace cells |
 | `overlayMargin` | `48` | Overlay inset from the screen edge (points) |
+| `overlayDebug` | `false` | Show per-source fetch time / effective interval lines (`DBG.VIT 1.2ms @5s`, `F2` = failing). On in `SM_FRAME_DUMP` builds. |
 
 ## Glyph sets
 

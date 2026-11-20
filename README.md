@@ -40,8 +40,13 @@ size, fall speed, trail fade, the logo size/alpha, and overlay size/margin are a
 
 On the main display (never in the System Settings preview, never on secondary
 displays) a Matrix-console **SYS** panel sits over the rain: clock, date,
-system uptime (`CONSTRUCT.UPTIME 4d 03:12`) and saver uptime. More panels
-(agents, usage, vitals) are on the way — see issue #1.
+system uptime (`CONSTRUCT.UPTIME 4d 03:12`), saver uptime, host vitals (load
+average, memory pressure, thermal state), battery level and power source
+(omitted on desktops) and a couple of atmospheric flavour lines. A single
+background poller refreshes each source on its own interval (vitals 5 s,
+battery 60 s), slows itself down if a read is slow or failing, and marks a
+section with a dim `·12s` when its data is getting old. More panels (agents,
+usage) are on the way — see issue #1.
 
 To turn it off without rebuilding, create `~/.config/matrix-diag/config.json`:
 
