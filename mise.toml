@@ -1,0 +1,109 @@
+# mise.toml — reproducible build / package / install for the SolarizedMatrix screensaver.
+# Docs: https://mise.jdx.dev/tasks/
+#
+#   mise run build      # compile + ad-hoc sign        -> build/SolarizedMatrix.saver
+#   mise run package    # build, then zip distributable -> SolarizedMatrix.saver.zip
+#   mise run install    # build, then install to ~/Library/Screen Savers and reload
+#   mise run clean      # remove the built bundle and the zip
+#
+# Cutting a release is driven by the `release` skill in .claude/skills/release/,
+# which calls these tasks to produce the artifact.
+
+[env]
+# Single source of truth for the release version. Bump this, then `mise run package`.
+SM_VERSION = "0.2"
+
+[tasks.build]
+description = "Compile MatrixView.swift into an ad-hoc-signed SolarizedMatrix.saver bundle"
+run = '''
+set -eu
+
+bundle="build/SolarizedMatrix.saver"
+macos="$bundle/Contents/MacOS"
+mkdir -p "$macos" "$bundle/Contents/Resources"
+
+# Info.plist is generated (build/ is git-ignored) so the bundle is reproducible
+# from a clean checkout. SM_VERSION is the single source of truth for the version.
+cat > "$bundle/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>SolarizedMatrix</string>
+    <key>CFBundleIdentifier</key>
+    <string>law.jude.SolarizedMatrix</string>
+    <key>CFBundleName</key>
+    <string>SolarizedMatrix</string>
+    <key>CFBundlePackageType</key>
+    <string>BNDL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${SM_VERSION}</string>
+    <key>CFBundleVersion</key>
+    <string>${SM_VERSION}</string>
+    <key>NSPrincipalClass</key>
+    <string>SolarizedMatrix.MatrixView</string>
+</dict>
+</plist>
+PLIST
+
+swiftc MatrixView.swift \
+  -module-name SolarizedMatrix \
+  -emit-library -Xlinker -bundle \
+  -o "$macos/SolarizedMatrix" \
+  -framework ScreenSaver -framework AppKit -framework Foundation \
+  -target arm64-apple-macosx13.0
+
+# Ad-hoc sign so macOS will load the bundle once the user clears quarantine.
+codesign -f -s - "$bundle"
+
+# A screensaver MUST be a Mach-O bundle, not a dylib, or macOS refuses to load it.
+file "$macos/SolarizedMatrix" | grep -q "Mach-O 64-bit bundle" \
+  || { echo "ERROR: $macos/SolarizedMatrix is not a Mach-O bundle"; exit 1; }
+
+echo "Built $bundle (v$SM_VERSION)"
+'''
+
+[tasks.package]
+description = "Build, then zip a distributable SolarizedMatrix.saver.zip (bundle + INSTALL.txt)"
+depends = ["build"]
+run = '''
+set -eu
+rm -f SolarizedMatrix.saver.zip
+# Name the bundle explicitly so the screenshots in build/ are never zipped in.
+zip -r -X SolarizedMatrix.saver.zip INSTALL.txt build/SolarizedMatrix.saver >/dev/null
+echo "Packaged SolarizedMatrix.saver.zip:"
+unzip -l SolarizedMatrix.saver.zip
+'''
+
+[tasks.install]
+description = "Build, then install into ~/Library/Screen Savers and reload the screensaver engine"
+depends = ["build"]
+run = '''
+set -eu
+dest="$HOME/Library/Screen Savers"
+mkdir -p "$dest"
+rm -rf "$dest/SolarizedMatrix.saver"
+cp -R build/SolarizedMatrix.saver "$dest/"
+killall legacyScreenSaver 2>/dev/null || true
+killall ScreenSaverEngine 2>/dev/null || true
+echo "Installed to $dest/SolarizedMatrix.saver — pick SolarizedMatrix in System Settings."
+'''
+
+[tasks.preview]
+description = "Regenerate the animated README preview (assets/matrix-preview.svg)"
+run = '''
+set -eu
+mkdir -p assets
+python3 tools/gen_preview.py > assets/matrix-preview.svg
+echo "Wrote assets/matrix-preview.svg ($(wc -c < assets/matrix-preview.svg) bytes)"
+'''
+
+[tasks.clean]
+description = "Remove the built bundle and the packaged zip"
+run = '''
+set -eu
+rm -rf build/SolarizedMatrix.saver
+rm -f SolarizedMatrix.saver.zip
+echo "Cleaned build/SolarizedMatrix.saver and SolarizedMatrix.saver.zip"
+'''
