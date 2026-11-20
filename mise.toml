@@ -16,7 +16,7 @@
 SM_VERSION = "0.2"
 
 [tasks.build]
-description = "Compile MatrixView.swift into an ad-hoc-signed SolarizedMatrix.saver bundle"
+description = "Compile MatrixView + PanelRenderer + Diagnostics/ into an ad-hoc-signed SolarizedMatrix.saver bundle"
 run = '''
 set -eu
 
@@ -49,7 +49,8 @@ cat > "$bundle/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-swiftc MatrixView.swift \
+# The saver = AppKit renderer (MatrixView + PanelRenderer) + the UI-free core.
+swiftc MatrixView.swift PanelRenderer.swift Diagnostics/*.swift \
   -module-name SolarizedMatrix \
   -emit-library -Xlinker -bundle \
   -o "$macos/SolarizedMatrix" \
@@ -81,6 +82,19 @@ swiftc Diagnostics/*.swift Tests/*.swift \
   -o build/tests/DiagnosticsTests \
   -target arm64-apple-macosx13.0
 ./build/tests/DiagnosticsTests
+'''
+
+[tasks.snapshot]
+description = "Render rain + overlay offscreen (fake environment, no screensaver host) to PNGs in build/snapshot"
+run = '''
+set -eu
+mkdir -p build/snapshot
+swiftc MatrixView.swift PanelRenderer.swift Diagnostics/*.swift Harness/main.swift \
+  -module-name SolarizedMatrix \
+  -o build/snapshot/SnapshotHarness \
+  -framework ScreenSaver -framework AppKit -framework Foundation \
+  -target arm64-apple-macosx13.0
+./build/snapshot/SnapshotHarness build/snapshot "${FRAMES:-150}"
 '''
 
 [tasks.package]

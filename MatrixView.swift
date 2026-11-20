@@ -5,6 +5,7 @@
 
 import ScreenSaver
 import AppKit
+import os
 
 // Jude logo SVG — fetched from jude.law/images/layout/logo.svg
 private let judeSVG = """
@@ -40,6 +41,11 @@ final class MatrixView: ScreenSaverView {
         static let logoFadeSpeed: CGFloat = 0.02   // per-frame ease toward target (smaller = slower)
         static let logoHoldMin:   Int     = 150    // min frames a phase holds (~5s @30fps)
         static let logoHoldMax:   Int     = 420    // max frames a phase holds (~14s @30fps)
+
+        // Diagnostic overlay (panels drawn over the rain on the main display).
+        static let overlayFontSize: CGFloat = 15
+        static let overlayColumns:  Int     = 34     // panel width in monospace cells
+        static let overlayMargin:   CGFloat = 48     // inset from the screen edge, points
     }
 
     // MARK: - Solarized palette
@@ -106,6 +112,17 @@ final class MatrixView: ScreenSaverView {
     private var dismissed = false
     private var ssObservers: [NSObjectProtocol] = []
 
+    // MARK: - Diagnostic overlay
+    // The UI-free core (Diagnostics/) builds panel models; PanelRenderer draws
+    // them. No core at all in the System Settings preview.
+    private var diagnostics: DiagnosticsCore?
+    private var panelRenderer: PanelRenderer?
+    /// Decided in setup(): not preview, main display, and config `overlay` on.
+    private var overlayActive = false
+    /// Test/harness hook: force the main-display decision (nil = detect).
+    var displayRoleOverride: Bool?
+    private static let log = Logger(subsystem: "law.jude.SolarizedMatrix", category: "overlay")
+
     // Cached draw attributes. A font lookup plus an attributes dictionary per
     // glyph cost a few thousand allocations a frame; body/head dictionaries only
     // change when a column resets, so build them once and reuse.
@@ -125,9 +142,16 @@ final class MatrixView: ScreenSaverView {
     private var logoEnvHold:   Int     = 0       // frames until next target flip
 
     // MARK: - Lifecycle
-    override init?(frame: NSRect, isPreview: Bool) {
+    override convenience init?(frame: NSRect, isPreview: Bool) {
+        self.init(frame: frame, isPreview: isPreview, environment: nil)
+    }
+
+    /// `environment` injects a fake diagnostics environment (render harness);
+    /// nil means the live one.
+    init?(frame: NSRect, isPreview: Bool, environment: DiagnosticsEnvironment?) {
         super.init(frame: frame, isPreview: isPreview)
         animationTimeInterval = 1.0 / 30.0
+        if !isPreview { diagnostics = DiagnosticsCore(env: environment ?? .live()) }
         observeScreenSaverState()
     }
     required init?(coder: NSCoder) { super.init(coder: coder) }
@@ -169,7 +193,35 @@ final class MatrixView: ScreenSaverView {
 
         buffer  = makeBuffer()
         buildLogoMask(bw: bounds.width, bh: bounds.height)
+        decideOverlay()
         didInit = true
+    }
+
+    /// Main display = the one holding the menu bar (CGMainDisplayID, i.e.
+    /// NSScreen.screens.first). With no window/screen yet, only a single-display
+    /// machine counts as main. Re-run whenever the view changes window.
+    private var isMainDisplay: Bool {
+        if let forced = displayRoleOverride { return forced }
+        guard let screen = window?.screen,
+              let num = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+        else { return NSScreen.screens.count <= 1 }
+        return CGDirectDisplayID(num.uint32Value) == CGMainDisplayID()
+    }
+
+    private func decideOverlay() {
+        let main = isMainDisplay
+        overlayActive = !isPreview && main && (diagnostics?.overlayEnabled ?? false)
+        if overlayActive, panelRenderer == nil {
+            panelRenderer = PanelRenderer(style: .init(fontSize: Cfg.overlayFontSize,
+                                                       columns: Cfg.overlayColumns))
+        }
+        let status = diagnostics.map { "\($0.configStatus)" } ?? "none"
+        Self.log.notice("overlay=\(self.overlayActive, privacy: .public) preview=\(self.isPreview, privacy: .public) main=\(main, privacy: .public) config=\(status, privacy: .public) size=\(Int(self.bounds.width), privacy: .public)x\(Int(self.bounds.height), privacy: .public)")
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if didInit { decideOverlay() }
     }
 
     override func startAnimation() { super.startAnimation() }
@@ -187,6 +239,7 @@ final class MatrixView: ScreenSaverView {
         colChar      = []; colHead     = []; colResetAt   = []
         colBodyAttrs = []; colHeadAttrs = []
         logoMask     = []; logoDrops   = []; logoColChar  = []
+        panelRenderer = nil; overlayActive = false
         cols         = 0
         didInit      = false
     }
@@ -322,6 +375,14 @@ final class MatrixView: ScreenSaverView {
         // Step 3: blit accumulated buffer to screen
         if let img = buf.makeImage() {
             screenCtx.draw(img, in: bounds)
+        }
+
+        // Step 4: diagnostic overlay, straight into the screen context (never
+        // the fading buffer) so it stays crisp. Panel models are rebuilt every
+        // frame so the clock ticks.
+        if overlayActive, let core = diagnostics, let renderer = panelRenderer,
+           let sys = core.panels().first {
+            renderer.draw(sys, corner: .topLeft, in: bounds, margin: Cfg.overlayMargin)
         }
     }
 
