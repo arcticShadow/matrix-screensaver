@@ -68,3 +68,17 @@ SVG sourced from `jude.law/images/layout/logo.svg`, embedded as a string constan
 ## Source of truth
 
 `MatrixView.swift` is the single source of truth — there is no separate browser preview. All tunables live in `Cfg`; edit and rebuild (see *Build & install*) to see changes.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live in GitHub Issues for `arcticShadow/matrix-screensaver` (via the `gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root, created lazily. See `docs/agents/domain.md`.
