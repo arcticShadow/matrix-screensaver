@@ -23,14 +23,35 @@ accent colour-per-column.
 
 | File | Purpose |
 |------|---------|
-| `MatrixView.swift` | The entire screensaver — single `ScreenSaverView` subclass. The source of truth for the look. |
+| `MatrixView.swift` | The `ScreenSaverView` subclass: rain, logo, lifecycle. The source of truth for the look. |
+| `PanelRenderer.swift` | Draws the diagnostic overlay's panels (AppKit). |
+| `Diagnostics/` | UI-free diagnostics core: config, panel model, panel builders. No AppKit, unit-tested. |
+| `Tests/` | Plain `swiftc` test executable for the core (`mise run test`; no XCTest). |
+| `Harness/` | Offscreen render harness (`mise run snapshot`): renders rain + overlay to PNGs with a fake environment. |
 | `build/SolarizedMatrix.saver/` | Bundle skeleton (`Info.plist` + `MacOS/`). Rebuild the binary from source. |
 | `assets/matrix-preview.svg` | The animated preview shown above. Generated, not hand-edited. |
 | `tools/gen_preview.py` | Generator for the preview SVG (`mise run preview`); mirrors the look from `MatrixView.swift`. |
 | `README.md` | This file — palette reference + build/install steps. |
 
 Tunables live in the `Cfg` struct at the top of `MatrixView.swift` — glyph cell
-size, fall speed, trail fade, and the logo size/alpha are all there.
+size, fall speed, trail fade, the logo size/alpha, and overlay size/margin are all there.
+
+## Diagnostic overlay
+
+On the main display (never in the System Settings preview, never on secondary
+displays) a Matrix-console **SYS** panel sits over the rain: clock, date,
+system uptime (`CONSTRUCT.UPTIME 4d 03:12`) and saver uptime. More panels
+(agents, usage, vitals) are on the way — see issue #1.
+
+To turn it off without rebuilding, create `~/.config/matrix-diag/config.json`:
+
+```json
+{ "overlay": false }
+```
+
+The file is optional (missing or malformed → defaults) and is read at each
+activation. It is personal and never committed. Other keys reserved by the spec
+(`trustedSSIDs`, `codenameSalt`, `profileTags`) are accepted and ignored for now.
 
 ## Solarized Dark palette
 
@@ -73,6 +94,8 @@ Then open System Settings ▸ Screen Saver and pick **SolarizedMatrix**.
 
 ```bash
 mise run build      # compile + ad-hoc sign          -> build/SolarizedMatrix.saver
+mise run test       # build + run the diagnostics-core tests (non-zero on failure)
+mise run snapshot   # render rain + overlay offscreen -> build/snapshot/*.png
 mise run install    # build, then install to ~/Library/Screen Savers and reload
 mise run package    # build, then zip a distributable -> SolarizedMatrix.saver.zip
 ```
@@ -89,7 +112,7 @@ also generates `Contents/Info.plist`, which the bundle needs in order to load):
 ```bash
 mkdir -p build/SolarizedMatrix.saver/Contents/MacOS
 
-swiftc MatrixView.swift \
+swiftc MatrixView.swift PanelRenderer.swift Diagnostics/*.swift \
   -module-name SolarizedMatrix \
   -emit-library -Xlinker -bundle \
   -o build/SolarizedMatrix.saver/Contents/MacOS/SolarizedMatrix \
@@ -121,11 +144,10 @@ doesn't refresh, log out/in or run `killall legacyScreenSaver`.
 
 ### Xcode (optional)
 
-If you prefer an Xcode project: **File ▸ New ▸ Project ▸ macOS ▸ Screen Saver** → name it `SolarizedMatrix`, replace the generated view with `MatrixView.swift`, set **Principal class** to `SolarizedMatrix.MatrixView`, and build.
+If you prefer an Xcode project: **File ▸ New ▸ Project ▸ macOS ▸ Screen Saver** → name it `SolarizedMatrix`, replace the generated view with `MatrixView.swift`, add `PanelRenderer.swift` and `Diagnostics/*.swift`, set **Principal class** to `SolarizedMatrix.MatrixView`, and build.
 
 ## Open design choices
 
 - **Glyphs**: currently katakana + code symbols mixed. Switch to pure katakana or pure code by editing the glyph set.
-- **Brutalist overlay**: a hard border frame, big mono wordmark, clock, and scanlines would round out the look. The Swift port renders rain + logo ghost rain only — adding the overlay (text + frame + scanlines) is the natural next step.
 - **Config sheet**: `hasConfigureSheet` is `false`. Add a sheet to expose speed/colors at runtime if wanted.
 - **Multi-display**: ScreenSaverView handles this, but test per-monitor sizing.

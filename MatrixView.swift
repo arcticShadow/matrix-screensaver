@@ -285,7 +285,29 @@ final class MatrixView: ScreenSaverView {
             || buffer?.height != Int(bounds.height)
         if needsSetup { setup() }
         needsDisplay = true
+        #if SM_FRAME_DUMP
+        dumpFrameIfDue()
+        #endif
     }
+
+    #if SM_FRAME_DUMP
+    // Real-host verification aid, compiled in only with
+    // `SM_SWIFT_FLAGS="-D SM_FRAME_DUMP" mise run install`. The screen can't be
+    // captured while the saver runs (the session is locked, loginwindow covers
+    // it), so the saver renders itself through the normal draw path into a
+    // bitmap and writes a PNG into its own (sandbox container) temp dir.
+    private var dumpFrameCount = 0
+    private func dumpFrameIfDue() {
+        dumpFrameCount += 1
+        guard !dismissed, dumpFrameCount == 150 || dumpFrameCount % 1800 == 0,
+              let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return }
+        cacheDisplay(in: bounds, to: rep)
+        let name = "SolarizedMatrix-frame-\(getpid())-\(isPreview ? "preview" : "main")-\(dumpFrameCount).png"
+        let path = (NSTemporaryDirectory() as NSString).appendingPathComponent(name)
+        let ok = (try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))) != nil
+        Self.log.notice("frame dump \(name, privacy: .public) ok=\(ok, privacy: .public)")
+    }
+    #endif
 
     // MARK: - Frame
     override func draw(_ rect: NSRect) {

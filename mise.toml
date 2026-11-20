@@ -52,7 +52,7 @@ PLIST
 # The saver = AppKit renderer (MatrixView + PanelRenderer) + the UI-free core.
 swiftc MatrixView.swift PanelRenderer.swift Diagnostics/*.swift \
   -module-name SolarizedMatrix \
-  -emit-library -Xlinker -bundle \
+  -emit-library -Xlinker -bundle ${SM_SWIFT_FLAGS:-} \
   -o "$macos/SolarizedMatrix" \
   -framework ScreenSaver -framework AppKit -framework Foundation \
   -target arm64-apple-macosx13.0
