@@ -105,10 +105,11 @@ enum AgentsPanel {
         let dormant = count { $0 == .dormant }
         let background = live.reduce(scan.unattributedBackground) { $0 + $1.record.background }
 
-        var lines: [PanelLine] = [.field("AGENT.LINK", "ONLINE", .ok)]
+        // Full totals block: link, (trust warning), six totals, ROSTER heading.
+        var header: [PanelLine] = [.field("AGENT.LINK", "ONLINE", .ok)]
         // Wi-Fi name unreadable: names stay codenames, and say why.
-        if inp.namer.trust == .unverified { lines.append(.field("NET", "UNVERIFIED", .warn)) }
-        lines += [
+        if inp.namer.trust == .unverified { header.append(.field("NET", "UNVERIFIED", .warn)) }
+        header += [
             .field("RUNNING", "\(live.count)"),
             .field("ACTIVE", "\(active)", active > 0 ? .ok : .dim),
             PanelLine(style: .field, label: "ATTENTION", value: "\(attention)",
@@ -118,10 +119,17 @@ enum AgentsPanel {
             .field("BACKGROUND", "\(background)", background > 0 ? .ok : .dim),
             .section("ROSTER", marker: inp.staleMarker),
         ]
+        // Compact totals: the same counts on one line, red while anything
+        // needs attention (used when the full block would crowd out the rows).
+        // It takes over the ATTENTION row's pulse.
+        let compact = PanelLine(style: .text,
+            label: "RUN \(live.count) · ATT \(attention) · ACT \(active) · AWT \(awaiting) · DOR \(dormant) · BG \(background)"
+                + (inp.staleMarker.map { " \($0)" } ?? ""),
+            value: "", severity: attention > 0 ? .alert : .normal, pulse: attention > 0)
 
         // Individually listed: attention (longest waiting first), active
         // (longest running first), awaiting (most recently idle first).
-        let listed = live.filter { $0.state != .dormant }.sorted(by: rosterOrder)
+        let rows = live.filter { $0.state != .dormant }.sorted(by: rosterOrder).map { row($0, inp) }
         var tail: [PanelLine] = []
         if dormant > 0 {
             let repos = Set(live.filter { $0.state == .dormant }.map(\.record.cwd)).count
@@ -129,17 +137,31 @@ enum AgentsPanel {
         }
         let ghosts = all.count - live.count
         if ghosts > 0 { tail.append(.text("✕ \(ghosts) GHOST", .dim)) }
-        if listed.isEmpty, tail.isEmpty { tail.append(.text("NO LIVE SESSIONS", .dim)) }
+        if rows.isEmpty, tail.isEmpty { tail.append(.text("NO LIVE SESSIONS", .dim)) }
 
-        let room = max(0, inp.maxLines - lines.count - tail.count)
-        var rows = listed.map { row($0, inp) }
-        if rows.count > room {
-            let keep = max(0, room - 1)
-            let more = rows.count - keep
-            rows = Array(rows.prefix(keep)) + [.text("+\(more) more", .dim)]
-        }
-        lines += rows + tail
+        let lines = fit(header: header, compact: compact, rows: rows, tail: tail, budget: inp.maxLines)
         return Panel(title: "AGENTS", lines: lines, pulse: attention > 0)
+    }
+
+    /// The line budget is a hard cap (the panel never grows into the logo).
+    /// Priority, highest first: totals, session rows in roster order
+    /// (attention, active, awaiting), the dormant then ghost summaries; when
+    /// rows are cut, `+N more` takes the last line. The full totals block is
+    /// kept while it still leaves room for the first row (and `+N more` if
+    /// rows are cut); below that the totals fold into one line; with a single
+    /// line the first row (attention first) outranks even that.
+    private static func fit(header: [PanelLine], compact: PanelLine, rows: [PanelLine],
+                            tail: [PanelLine], budget: Int) -> [PanelLine] {
+        let budget = max(1, budget)
+        func roster(_ room: Int) -> [PanelLine] {
+            if rows.count <= room { return rows + tail.prefix(room - rows.count) }
+            if room < 2 { return Array(rows.prefix(room)) }
+            return rows.prefix(room - 1) + [.text("+\(rows.count - (room - 1)) more", .dim)]
+        }
+        let minRoster = rows.isEmpty ? min(1, tail.count) : (rows.count > 1 ? 2 : 1)
+        if header.count + minRoster <= budget { return header + roster(budget - header.count) }
+        if budget == 1, !rows.isEmpty { return [rows[0]] }
+        return [compact] + roster(budget - 1)
     }
 
     private static func rosterOrder(_ a: ClassifiedSession, _ b: ClassifiedSession) -> Bool {
