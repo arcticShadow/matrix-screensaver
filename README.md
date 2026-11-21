@@ -52,7 +52,9 @@ section with a dim `·12s` when its data is getting old.
 In the opposite corner an **AGENTS** panel counts your Claude Code sessions
 across every `~/.claude*` config directory (CLI and Claude Desktop): RUNNING,
 ACTIVE, ATTENTION (blocked on a permission prompt or question, red), AWAITING
-(went idle under 15 minutes ago, amber) and DORMANT. A roster lists the
+(went idle under 15 minutes ago, amber) and DORMANT, plus BACKGROUND: the
+in-flight subagents, running background jobs and daemon workers behind them
+(each roster row shows its own `+N BG`). A roster lists the
 sessions that matter, attention first, each under a stable salted codename
 (`IRON-LATTICE`) with a three-letter profile tag; only the category of a
 prompt (`APPROVE BASH`, `INPUT NEEDED`) is ever shown, never the command. If

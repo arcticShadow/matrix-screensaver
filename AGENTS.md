@@ -21,6 +21,7 @@
 | `Diagnostics/HostReaders.swift` | `HostVitals` / `PowerStatus` and the live readers (getloadavg, memory-pressure sysctl, thermal state, IOKit power sources). |
 | `Diagnostics/Flavour.swift` | Clock-driven atmosphere lines (scrolling hex, status readout). |
 | `Diagnostics/Sessions.swift` | Session discovery (`~/.claude*` dirs with `sessions/`, canonical `<pid>.json` only), `SessionRecord`, `WaitCategory` (the only part of `waitingFor` kept), `Liveness` (`proc_pidinfo` + UTC `procStart`). |
+| `Diagnostics/BackgroundAgents.swift` | Background-agent counts per session (`BackgroundAgentScanner`, run inside the sessions scan): fresh unfinished subagent metas, running jobs, live daemon-roster workers; `ProjectDirName` (Claude Code's cwd → project-dir sanitiser); `BackgroundCfg` tunables. |
 | `Diagnostics/AgentsPanel.swift` | `AgentClassifier` (ATTENTION/ACTIVE/AWAITING/DORMANT/GHOST, `AgentsCfg` tunables) and the pure AGENTS panel builder (totals, sorted roster, dormant fold, `+N more`). |
 | `Diagnostics/Naming.swift` | `DisplayNamer` (the one place a session's on-screen name is decided), salted `Codename`, `ProfileTags`. |
 | `Diagnostics/Layout.swift` | `PanelLayout.place`: which corner and width each panel gets (SYS top-left, AGENTS bottom-right). |
@@ -85,6 +86,7 @@ This explicit buffer is necessary because `ScreenSaverView.draw()` does not guar
 - Adding a source: see the header comment in `Diagnostics/Poller.swift` (reader in `DiagnosticsEnvironment`, slot in `DiagSnapshot`, one `.make(...)` line in `PollSources.standard` + `order`, its panel lines).
 - Real home comes from `getpwuid(getuid())`; the sandboxed host's `NSHomeDirectory()` is its container. The sandboxed host *can* read `~/.config/matrix-diag/config.json` (verified).
 - AGENTS: session files are read on the poller queue (liveness via `proc_pidinfo` there too); a scan that can't list a sessions dir, or finds session files of which none parse, or a failing sessions source shows `AGENT.LINK SIGNAL LOST`, never zero. Private free text (`name`, `waitingFor` command, cwd, config-dir names) never reaches a `Panel`: names go through `DisplayNamer`, dirs through `ProfileTags`. The renderer sets `agentsMaxLines` from the screen height.
+- BACKGROUND: per live session, subagents are read from `<its own config dir>/projects/<sanitised cwd>/<sessionId>/subagents/`; only when that path doesn't hold the session does a fallback list every project dir for the session id, and the answer is cached per session in the poll source's `BackgroundAgentScanner` (so it is not re-run every 2 s). Running jobs (`working`/`starting`) and live roster workers are deduplicated by session id and attributed within the same config dir; unmatched ones count only in the total. Missing or malformed background files are zero, never SIGNAL LOST. Rows show `+N BG` (capped at 99).
 - Keep the dismissal guarantees: `autoreleasepool` in `draw`, cached attrs (renderer caches its own), terminal `didstop`, `teardown()` releases buffers, the renderer and the poller lease.
 - Real-host check without screen capture (the session is locked while the saver runs): `SM_SWIFT_FLAGS="-D SM_FRAME_DUMP" mise run install` makes the saver write `SolarizedMatrix-frame-<pid>-main-150.png` into its container's `Data/tmp` (`~/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/Data/tmp/`). Reinstall without the flag afterwards. That build also logs `draw ms p50=… p99=… max=… polling=…` every 300 frames and `poller decide/teardown leased=… running=… leases=… starts=…`.
 
@@ -97,8 +99,10 @@ This explicit buffer is necessary because `ScreenSaverView.draw()` does not guar
 | `fadeAlpha` | `0.018` | Trail length — lower = longer, glowier trails |
 | `overlayFontSize` | `15` | Overlay text size (points) |
 | `overlayMargin` | `48` | Overlay inset from the screen edge (points) |
-| `PanelLayout.sysColumns` / `agentsColumns` | `34` / `46` | Panel widths in monospace cells (`Diagnostics/Layout.swift`) |
+| `PanelLayout.sysColumns` / `agentsColumns` | `34` / `52` | Panel widths in monospace cells (`Diagnostics/Layout.swift`) |
 | `AgentsCfg.awaitingWindow` | `15 min` | Idle sessions younger than this are AWAITING, older ones DORMANT (`Diagnostics/AgentsPanel.swift`) |
+| `BackgroundCfg.subagentFreshness` | `5 min` | An unfinished subagent counts only if its transcript changed this recently (crash guard) (`Diagnostics/BackgroundAgents.swift`) |
+| `BackgroundCfg.fallbackRetry` | `60 s` | How long a failed cwd-fallback lookup for a session is cached before the project dirs are listed again |
 | `overlayDebug` | `false` | Show per-source fetch time / effective interval lines (`DBG.VIT 1.2ms @5s`, `F2` = failing). On in `SM_FRAME_DUMP` builds. |
 
 ## Glyph sets

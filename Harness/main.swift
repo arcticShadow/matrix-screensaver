@@ -95,17 +95,21 @@ struct HarnessSession {
     var ago: TimeInterval
     /// false = GHOST (the fake liveness checker reports it dead).
     var alive = true
+    /// Running subagents (fresh, unfinished meta files under projects/).
+    var subagents = 0
+    /// A running background job attributed to this session.
+    var job = false
 }
 
 /// A busy mixed workload: every state, several config dirs, CLI and desktop.
 let demoSessions: [HarnessSession] = {
     var s: [HarnessSession] = [
         .init(pid: 4101, cwd: "/home/demo/code/alpha", status: "waiting",
-              waitingFor: "approve Bash: make deploy", ago: 95),
+              waitingFor: "approve Bash: make deploy", ago: 95, subagents: 1),
         .init(dir: ".claude-alpha", pid: 4102, cwd: "/home/demo/code/beta", status: "waiting",
               waitingFor: "input needed", entrypoint: "claude-desktop", ago: 20),
-        .init(pid: 4103, cwd: "/home/demo/code/gamma", status: "busy", ago: 640),
-        .init(dir: ".claude-beta", pid: 4104, cwd: "/home/demo/code/delta", status: "busy", ago: 75),
+        .init(pid: 4103, cwd: "/home/demo/code/gamma", status: "busy", ago: 640, subagents: 3, job: true),
+        .init(dir: ".claude-beta", pid: 4104, cwd: "/home/demo/code/delta", status: "busy", ago: 75, subagents: 2),
         .init(pid: 4105, cwd: "/home/demo/code/alpha/.claude/worktrees/w1", status: "shell", ago: 12),
         .init(dir: ".claude-alpha", pid: 4106, cwd: "/home/demo/code/epsilon", status: "idle",
               entrypoint: "claude-desktop", ago: 180),
@@ -168,6 +172,20 @@ func makeWorld(_ s: Scenario, clock: Clock) -> DiagnosticsEnvironment {
         let body = s.name == "agents-signal-lost" ? Data("{truncated".utf8)
                                                    : (try? JSONSerialization.data(withJSONObject: obj)) ?? Data()
         FileManager.default.createFile(atPath: "\(dir)/\(f.pid).json", contents: body)
+        let sub = "\(home)/\(f.dir)/projects/\(ProjectDirName.from(cwd: f.cwd))/s-\(f.pid)/subagents"
+        for i in 0..<f.subagents {
+            try? FileManager.default.createDirectory(atPath: sub, withIntermediateDirectories: true)
+            FileManager.default.createFile(atPath: "\(sub)/agent-a\(i).meta.json",
+                                           contents: Data(#"{"agentType":"general-purpose"}"#.utf8))
+            FileManager.default.createFile(atPath: "\(sub)/agent-a\(i).jsonl", contents: Data("{}".utf8),
+                                           attributes: [.modificationDate: t0.addingTimeInterval(-20)])
+        }
+        if f.job {
+            let job = "\(home)/\(f.dir)/jobs/\(String(format: "%08x", f.pid))"
+            try? FileManager.default.createDirectory(atPath: job, withIntermediateDirectories: true)
+            FileManager.default.createFile(atPath: "\(job)/state.json",
+                                           contents: Data(#"{"state":"working","sessionId":"s-\#(f.pid)"}"#.utf8))
+        }
     }
     let dead = Set(s.sessions.filter { !$0.alive }.map(\.pid))
     let thermal = s.thermal, power = s.power, failAfterFirst = s.vitalsFailAfterFirst
