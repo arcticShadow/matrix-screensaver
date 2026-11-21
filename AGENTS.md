@@ -46,7 +46,7 @@
 ```bash
 mise run test       # swiftc Diagnostics/*.swift Tests/*.swift -> build/tests/DiagnosticsTests, run it (non-zero on failure)
 mise run build      # swiftc MatrixView.swift PanelRenderer.swift Diagnostics/*.swift -> Mach-O bundle, ad-hoc signed
-mise run snapshot   # offscreen render to build/snapshot/*.png (+ overlay-debug/-stale/-desktop) and a shared-poller/teardown check; TIMING=1 adds a frame-time check
+mise run snapshot   # offscreen render to build/snapshot/*.png (+ overlay-debug/-stale/-desktop), a banner-fit check (alert-banner-long, 1024 pt wide) and a shared-poller/teardown check; TIMING=1 adds a frame-time check
 mise run install    # build + copy to ~/Library/Screen Savers + kill the hosts so they reload
 mise run package    # build + collector:build, zip one SolarizedMatrix/ folder -> SolarizedMatrix.saver.zip
 mise -E collector bootstrap   # opt-in: install/update the collector LaunchAgent (mise.collector.toml)

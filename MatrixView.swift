@@ -157,6 +157,8 @@ final class MatrixView: ScreenSaverView {
     var displayRoleOverride: Bool?
     /// Seconds per panel corner (harness hook: shorten to watch the rotation).
     var panelRotationInterval: TimeInterval = Cfg.panelRotationInterval
+    /// Harness hook: the takeover banner's geometry on the last frame (nil = none drawn).
+    private(set) var lastBannerGeometry: PanelRenderer.BannerGeometry?
     /// AGENTS line budget per corner (logo-aware); rebuilt with the logo mask.
     private var agentsCapacity: [PanelCorner: Int] = [:]
     private static let log = Logger(subsystem: "law.jude.SolarizedMatrix", category: "overlay")
@@ -555,8 +557,9 @@ final class MatrixView: ScreenSaverView {
             for placed in placedPanels {
                 renderer.draw(placed, in: bounds, margin: Cfg.overlayMargin, pulse: pulse)
             }
+            lastBannerGeometry = nil
             if let banner {
-                renderer.drawBanner(banner.text, in: bounds, alpha: glitchEnvelope(banner),
+                lastBannerGeometry = renderer.drawBanner(banner.text, in: bounds, alpha: glitchEnvelope(banner),
                                     jitter: inBurst(banner) && Bool.random()
                                         ? CGFloat.random(in: -Cfg.bannerJitter...Cfg.bannerJitter) : 0)
             }

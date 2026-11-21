@@ -226,18 +226,27 @@ final class PanelRenderer {
                                  withAttributes: valueAttrs[line.severity] ?? labelAttrs)
     }
 
+    /// Where a drawn banner landed: its box and the (scaled) text inside it.
+    struct BannerGeometry: Equatable {
+        var box: CGRect
+        var text: CGRect
+    }
+
     /// Centre takeover banner: `text` in red on an opaque plate with a red
     /// double frame. `alpha` fades it in/out; `jitter` (points) shifts the
-    /// text sideways with a cyan ghost copy for the glitch bursts.
-    func drawBanner(_ text: String, in bounds: CGRect, alpha: CGFloat, jitter: CGFloat) {
-        guard let ctx = NSGraphicsContext.current?.cgContext, alpha > 0 else { return }
+    /// text sideways with a cyan ghost copy for the glitch bursts. Returns
+    /// the geometry drawn (nil when nothing was drawn).
+    @discardableResult
+    func drawBanner(_ text: String, in bounds: CGRect, alpha: CGFloat, jitter: CGFloat) -> BannerGeometry? {
+        guard let ctx = NSGraphicsContext.current?.cgContext, alpha > 0 else { return nil }
         let str = text as NSString
         if bannerSizeCache?.text != text { bannerSizeCache = (text, str.size(withAttributes: bannerAttrs)) }
         let textSize = bannerSizeCache!.size
         let padX = style.bannerFontSize * 1.4, padY = style.bannerFontSize * 0.9
-        // Never wider than the screen (minus a margin); shrink if the name is long.
+        // Never wider than `bannerMaxWidth` of the screen: only the text
+        // shrinks (the padding stays), so it alone must fit what the padding leaves.
         let maxW = bounds.width * style.bannerMaxWidth
-        let scale = min(1, maxW / (textSize.width + 2 * padX))
+        let scale = textSize.width > 0 ? max(0, min(1, (maxW - 2 * padX) / textSize.width)) : 1
         let box = CGRect(x: bounds.midX - (textSize.width * scale + 2 * padX) / 2,
                          y: bounds.midY - (textSize.height * scale + 2 * padY) / 2,
                          width: textSize.width * scale + 2 * padX,
@@ -259,6 +268,8 @@ final class PanelRenderer {
         }
         str.draw(at: CGPoint(x: jitter, y: 0), withAttributes: bannerAttrs)
         ctx.restoreGState()
+        return BannerGeometry(box: box, text: CGRect(origin: origin, size: CGSize(width: textSize.width * scale,
+                                                                                  height: textSize.height * scale)))
     }
 
     private func drawRule(_ ctx: CGContext, x: CGFloat, y: CGFloat, width: CGFloat, color: NSColor) {

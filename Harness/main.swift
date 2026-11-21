@@ -60,6 +60,11 @@ struct Scenario {
     var collector: CollectorState? = nil
     /// Clock start (default t0).
     var start: Date = t0
+    /// View size in points (default: the global 1440x900).
+    var viewSize: NSSize? = nil
+    /// Assert that the takeover banner drawn on the last frame fits this
+    /// fraction of the view width (text inside its box). nil = no check.
+    var bannerMustFit: CGFloat? = nil
 }
 
 /// A fake collector state at t0: two healthy accounts (one near its limits,
@@ -161,6 +166,13 @@ let scenarios = [
              sessions: alertSessions, frames: 210),
     Scenario(name: "alert-after", configJSON: #"{ "codenameSalt": "harness-demo" }"#,
              sessions: alertSessions, frames: 300),
+    // Longest possible banner (13-char repo name on a trusted network + a
+    // 10-char tool) on a narrow 1024-pt screen: it must shrink to fit 90 %.
+    Scenario(name: "alert-banner-long",
+             configJSON: #"{ "codenameSalt": "harness-demo", "trustedSSIDs": ["TrustedNet"] }"#,
+             sessions: [.init(pid: 4101, cwd: "/home/demo/code/an-extremely-long-repository-name", status: "waiting",
+                              waitingFor: "approve NotebookEdit: x", ago: 25)],
+             frames: 210, wifi: "TrustedNet", viewSize: NSSize(width: 1024, height: 640), bannerMustFit: 0.9),
     // Trusted network: real (fake) repo names. Unreadable Wi-Fi: codenames + NET UNVERIFIED.
     Scenario(name: "agents-trusted",
              configJSON: #"{ "codenameSalt": "harness-demo", "trustedSSIDs": ["TrustedNet"] }"#,
@@ -285,13 +297,14 @@ func render(_ s: Scenario) throws -> String {
     let clock = Clock(start: s.start)
     let env = makeWorld(s, clock: clock)
     let hub = PollerHub(tickInterval: 0.01)
-    guard let view = MatrixView(frame: NSRect(origin: .zero, size: size),
+    let viewSize = s.viewSize ?? size
+    guard let view = MatrixView(frame: NSRect(origin: .zero, size: viewSize),
                                 isPreview: s.isPreview, environment: env,
                                 pollerHub: hub, debugLines: s.debugLines) else {
         throw NSError(domain: "harness", code: 1)
     }
     view.displayRoleOverride = s.mainDisplay
-    let (rep, ctx) = try makeContext()
+    let (rep, ctx) = try makeContext(viewSize)
 
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = ctx
@@ -304,6 +317,16 @@ func render(_ s: Scenario) throws -> String {
         if s.clockStep > 0.1 { Thread.sleep(forTimeInterval: 0.002) }   // give the poller turns
     }
     NSGraphicsContext.restoreGraphicsState()
+    if let fit = s.bannerMustFit {
+        guard let g = view.lastBannerGeometry else {
+            throw NSError(domain: "harness: \(s.name): no banner on the last frame", code: 6)
+        }
+        let maxW = viewSize.width * fit
+        let ok = g.box.width <= maxW.rounded(.up) + 1 && g.box.minX >= 0 && g.box.maxX <= viewSize.width
+            && g.box.contains(g.text)
+        print("banner fit \(s.name): box \(Int(g.box.width))pt of max \(Int(maxW))pt, text \(Int(g.text.width))pt inside=\(g.box.contains(g.text)) ok=\(ok)")
+        if !ok { throw NSError(domain: "harness: \(s.name): banner overflows \(Int(fit * 100)) % of the width", code: 7) }
+    }
     view.stopAnimation()
     if hub.isRunning { throw NSError(domain: "harness: poller still running after stopAnimation", code: 4) }
 
