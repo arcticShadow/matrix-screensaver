@@ -21,6 +21,7 @@
 | `Diagnostics/HostReaders.swift` | `HostVitals` / `PowerStatus` and the live readers (getloadavg, memory-pressure sysctl, thermal state, IOKit power sources). |
 | `Diagnostics/Flavour.swift` | Clock-driven atmosphere lines (scrolling hex, status readout). |
 | `Diagnostics/Sessions.swift` | Session discovery (`~/.claude*` dirs with `sessions/`, canonical `<pid>.json` only), `SessionRecord`, `WaitCategory` (the only part of `waitingFor` kept), `Liveness` (`proc_pidinfo` + UTC `procStart`). |
+| `Diagnostics/BackgroundAgents.swift` | Background-agent counts per session (`BackgroundAgentScanner`, run inside the sessions scan): fresh unfinished subagent metas, running jobs, live daemon-roster workers; `ProjectDirName` (Claude Code's cwd → project-dir sanitiser); `BackgroundCfg` tunables. |
 | `Diagnostics/AgentsPanel.swift` | `AgentClassifier` (ATTENTION/ACTIVE/AWAITING/DORMANT/GHOST, `AgentsCfg` tunables) and the pure AGENTS panel builder (totals, sorted roster, dormant fold, `+N more`). |
 | `Diagnostics/Naming.swift` | `DisplayNamer` (the one place a session's on-screen name is decided), salted `Codename`, `ProfileTags`. |
 | `Diagnostics/Layout.swift` | `PanelLayout.place`: which corner and width each panel gets (SYS top-left, AGENTS bottom-right). |
@@ -29,7 +30,9 @@
 | `Collector/` | The unsandboxed collector executable (`mise run collector:build`): `Collector.swift` run loop + `CollectorSource` protocol + `AtomicFile`, `UsageSource.swift` (keychain naming, discovery, usage endpoint), `TokenRefresh.swift` (`claude -p` refresh, see below), `LiveDeps.swift` (`security`, URLSession allowlist, binary resolution, `LiveProcess`), `CollectorLog.swift`, `main.swift`. |
 | `Tests/` | Plain `swiftc` test executable (`main.swift` lists suites, `TestKit.swift` assertion helper, one `*Tests.swift` per seam). |
 | `Harness/main.swift` | Offscreen render harness: real MatrixView + fake environment -> PNGs. |
-| `mise.toml` | `build`, `test`, `snapshot`, `install`, `package`, `preview`, `clean` tasks. **Authoritative build commands.** |
+| `mise.toml` | `build`, `test`, `snapshot`, `install`, `package`, `preview`, `clean`, `collector:build` tasks, plus a `collector:uninstall` that delegates to `mise.collector.toml`. **Authoritative build commands.** Never put a `bootstrap` task here (it would make a plain `mise bootstrap` install the collector). |
+| `mise.collector.toml` | Opt-in collector install (`mise -E collector bootstrap`): the LaunchAgent `dev.mise.matrix-diag-collector`, the idempotent `bootstrap` task (install binary to `~/.local/libexec/matrix-diag/`, log dir, `--init-config`, kickstart) and the real `collector:uninstall [--purge]`. Self-contained so a release zip can ship it without `mise.toml`. |
+| `Collector/ConfigInit.swift` | `ConfigInitializer.createIfMissing` behind `matrix-diag-collector --init-config`: config with defaults + random salt, 0600, O_EXCL, never overwrites. |
 | `README.md` | Palette reference, build steps, design notes. |
 | `AGENTS.md` | This file. |
 
@@ -40,7 +43,11 @@ mise run test       # swiftc Diagnostics/*.swift Tests/*.swift -> build/tests/Di
 mise run build      # swiftc MatrixView.swift PanelRenderer.swift Diagnostics/*.swift -> Mach-O bundle, ad-hoc signed
 mise run snapshot   # offscreen render to build/snapshot/*.png (+ overlay-debug/-stale/-desktop) and a shared-poller/teardown check; TIMING=1 adds a frame-time check
 mise run install    # build + copy to ~/Library/Screen Savers + kill the hosts so they reload
+mise -E collector bootstrap   # opt-in: install/update the collector LaunchAgent (mise.collector.toml)
+mise run collector:uninstall  # remove agent, plist, binary, logs, state; --purge also removes the config
 ```
+
+mise loads LaunchAgents (bootstrap step 5) before the `bootstrap` task (step 9), so on a first install the agent's first run finds no binary; the task kickstarts it at the end. The task runs on every bootstrap and must stay idempotent. `--init-config` is passed `--config "$HOME/..."` explicitly because the binary otherwise resolves home with `getpwuid`, while the uninstall uses `$HOME`.
 
 `mise.toml` holds the exact `swiftc` invocations. The `build/` directory and compiled `.saver` are gitignored — always build from source; put every build/test artifact under `build/`.
 
@@ -80,6 +87,7 @@ This explicit buffer is necessary because `ScreenSaverView.draw()` does not guar
 - Token refresh (`Collector/TokenRefresh.swift`, tunables in `TokenRefreshCfg`): the collector never calls the OAuth token endpoint (the HTTP allowlist only permits GET usage). When an account's token is expired or rejected (401/403) **and** its usage data is > 2 h stale, it runs `claude -p` (haiku, trivial prompt, `--safe-mode --tools "" --strict-mcp-config --no-session-persistence --session-id <uuid>`) so Claude Code refreshes its own token, then fetches usage again in the same run. At most once per hour per account; never for network errors or accounts with no token. The child env always has HOME/USER/LOGNAME (from passwd), drops other credentials and `CLAUDE_CODE_*`, and sets `CLAUDE_CONFIG_DIR` only for non-default dirs (setting it for `~/.claude` changes the keychain service name). The session id is recorded and checkpointed to the state file, then the collector waits 6 s (> the saver's 5 s `COL` poll) before launching, so the AGENTS panel hides the run's live session file from the start. Records are kept 7 days.
 - Real home comes from `getpwuid(getuid())`; the sandboxed host's `NSHomeDirectory()` is its container. The sandboxed host *can* read `~/.config/matrix-diag/config.json` (verified).
 - AGENTS: session files are read on the poller queue (liveness via `proc_pidinfo` there too); a scan that can't list a sessions dir, or finds session files of which none parse, or a failing sessions source shows `AGENT.LINK SIGNAL LOST`, never zero. Private free text (`name`, `waitingFor` command, cwd, config-dir names) never reaches a `Panel`: names go through `DisplayNamer`, dirs through `ProfileTags`. The renderer sets `agentsMaxLines` from the screen height.
+- BACKGROUND: per live session, subagents are read from `<its own config dir>/projects/<sanitised cwd>/<sessionId>/subagents/`; only when that path doesn't hold the session does a fallback list every project dir for the session id, and the answer is cached per session in the poll source's `BackgroundAgentScanner` (so it is not re-run every 2 s). Running jobs (`working`/`starting`) and live roster workers are deduplicated by session id and attributed within the same config dir; unmatched ones count only in the total. Missing or malformed background files are zero, never SIGNAL LOST. Rows show `+N BG` (capped at 99).
 - Keep the dismissal guarantees: `autoreleasepool` in `draw`, cached attrs (renderer caches its own), terminal `didstop`, `teardown()` releases buffers, the renderer and the poller lease.
 - Real-host check without screen capture (the session is locked while the saver runs): `SM_SWIFT_FLAGS="-D SM_FRAME_DUMP" mise run install` makes the saver write `SolarizedMatrix-frame-<pid>-main-150.png` into its container's `Data/tmp` (`~/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/Data/tmp/`). Reinstall without the flag afterwards. That build also logs `draw ms p50=… p99=… max=… polling=…` every 300 frames and `poller decide/teardown leased=… running=… leases=… starts=…`.
 
@@ -92,8 +100,10 @@ This explicit buffer is necessary because `ScreenSaverView.draw()` does not guar
 | `fadeAlpha` | `0.018` | Trail length — lower = longer, glowier trails |
 | `overlayFontSize` | `15` | Overlay text size (points) |
 | `overlayMargin` | `48` | Overlay inset from the screen edge (points) |
-| `PanelLayout.sysColumns` / `agentsColumns` | `34` / `46` | Panel widths in monospace cells (`Diagnostics/Layout.swift`) |
+| `PanelLayout.sysColumns` / `agentsColumns` | `34` / `52` | Panel widths in monospace cells (`Diagnostics/Layout.swift`) |
 | `AgentsCfg.awaitingWindow` | `15 min` | Idle sessions younger than this are AWAITING, older ones DORMANT (`Diagnostics/AgentsPanel.swift`) |
+| `BackgroundCfg.subagentFreshness` | `5 min` | An unfinished subagent counts only if its transcript changed this recently (crash guard) (`Diagnostics/BackgroundAgents.swift`) |
+| `BackgroundCfg.fallbackRetry` | `60 s` | How long a failed cwd-fallback lookup for a session is cached before the project dirs are listed again |
 | `overlayDebug` | `false` | Show per-source fetch time / effective interval lines (`DBG.VIT 1.2ms @5s`, `F2` = failing). On in `SM_FRAME_DUMP` builds. |
 
 ## Glyph sets

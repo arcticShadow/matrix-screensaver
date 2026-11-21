@@ -4,11 +4,13 @@
 //
 
 configTests()
+configInitTests()
 sysPanelTests()
 coreTests()
 pollerTests()
 hubTests()
 agentsTests()
+backgroundTests()
 collectorTests()
 usagePanelTests()
 refreshTests()
