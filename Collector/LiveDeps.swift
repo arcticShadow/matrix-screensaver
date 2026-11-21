@@ -9,24 +9,31 @@
 import Foundation
 
 enum LiveKeychain {
-    /// `security find-generic-password -s <svc> -w`. The secret is read from
-    /// the pipe into memory only; it is never logged or put on argv.
-    static func read(service: String) -> KeychainRead {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        p.arguments = ["find-generic-password", "-s", service, "-w"]
-        let out = Pipe()
-        p.standardOutput = out
-        p.standardError = FileHandle.nullDevice
-        do { try p.run() } catch { return .failed(-1) }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        switch p.terminationStatus {
+    /// `security` normally answers in milliseconds; a hang (locked keychain,
+    /// stuck securityd) must not block the whole collector run.
+    static let timeout: TimeInterval = 10
+
+    /// `security find-generic-password -s <svc> -w`, run through `run` (live:
+    /// LiveProcess.capture, which enforces `timeout`). The secret is read from
+    /// the pipe into memory only; it is never logged or put on argv. A
+    /// timeout or launch failure is `.failed` (the account's KEYCHAIN error).
+    static func read(service: String,
+                     environment: [String: String] = ProcessInfo.processInfo.environment,
+                     run: (ProcessSpec) throws -> ProcessOutput = LiveProcess.capture) -> KeychainRead {
+        let spec = ProcessSpec(executable: "/usr/bin/security",
+                               arguments: ["find-generic-password", "-s", service, "-w"],
+                               environment: environment,
+                               workingDirectory: "/",
+                               timeout: timeout)
+        let out: ProcessOutput
+        do { out = try run(spec) } catch { return .failed(-1) }
+        if out.timedOut { return .failed(out.status) }
+        switch out.status {
         case 0:
-            let s = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            let s = String(decoding: out.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
             return .found(s)
         case 44: return .notFound
-        default: return .failed(p.terminationStatus)
+        default: return .failed(out.status)
         }
     }
 }

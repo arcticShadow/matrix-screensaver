@@ -330,6 +330,53 @@ func collectorTests() {
         expectEqual(w.account(".claude")?.lastError, nil)
     }
 
+    test("live keychain: security runs with a bounded timeout; a hang is that account's KEYCHAIN failure only") {
+        let w = FakeCollector("col-keychain-hang")
+        w.addAccount(".claude", token: "tok-w")
+        w.addAccount(".claude-alpha", token: "tok-a")
+        w.responses["tok-w"] = (200, usageBody(five: 1, seven: 1))
+        let hung = KeychainNaming.serviceName(configDir: "\(w.home)/.claude-alpha", home: w.home)
+        let fake = w.ctx
+        var specs: [ProcessSpec] = []
+        var ctx = fake
+        // The live reader, driven by a fake process runner: `security` hangs
+        // for one service (the runner reports the timeout), answers for the other.
+        ctx.readKeychain = { svc in
+            LiveKeychain.read(service: svc, environment: ["HOME": "/home/someone"]) { spec in
+                specs.append(spec)
+                if spec.arguments.contains(hung) { return ProcessOutput(status: 15, timedOut: true, stdout: Data()) }
+                guard case let .found(json) = fake.readKeychain(svc) else {
+                    return ProcessOutput(status: 44, timedOut: false, stdout: Data())
+                }
+                return ProcessOutput(status: 0, timedOut: false, stdout: Data((json + "\n").utf8))
+            }
+        }
+        let r = Collector.run(statePath: w.statePath, sources: [UsageSource()], ctx: ctx)
+        expectEqual(r.failed, [])
+        expectEqual(w.account(".claude-alpha")?.token, .error)
+        expectEqual(w.account(".claude-alpha")?.lastError, "KEYCHAIN")
+        expectEqual(w.account(".claude")?.token, .ok)
+        expectEqual(specs.count, 2)
+        for s in specs {
+            expectEqual(s.executable, "/usr/bin/security")
+            expectEqual(Array(s.arguments.prefix(2)), ["find-generic-password", "-s"])
+            expectEqual(s.arguments.last, "-w")
+            expect(s.timeout > 0 && s.timeout <= 30, "bounded: \(s.timeout)")
+            expectEqual(s.environment["HOME"], "/home/someone")
+        }
+        // Exit statuses: 44 = no item, anything else = failure.
+        let notFound = LiveKeychain.read(service: "x", environment: [:]) { _ in
+            ProcessOutput(status: 44, timedOut: false, stdout: Data())
+        }
+        expectEqual(notFound, .notFound)
+        let denied = LiveKeychain.read(service: "x", environment: [:]) { _ in
+            ProcessOutput(status: 51, timedOut: false, stdout: Data())
+        }
+        expectEqual(denied, .failed(51))
+        struct NoLaunch: Error {}
+        expectEqual(LiveKeychain.read(service: "x", environment: [:]) { _ in throw NoLaunch() }, .failed(-1))
+    }
+
     test("atomic write: a failure before rename leaves the old file intact and no temp file") {
         let w = FakeCollector("col-atomic")
         w.addAccount(".claude", token: "tok-w")

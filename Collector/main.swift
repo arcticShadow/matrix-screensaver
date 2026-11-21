@@ -61,7 +61,7 @@ let envPath = processEnv["PATH"]
 let ctx = CollectorContext(now: Date.init,
                            home: home,
                            config: ConfigLoader.load(path: configPath).config,
-                           readKeychain: LiveKeychain.read(service:),
+                           readKeychain: { LiveKeychain.read(service: $0, environment: processEnv) },
                            http: LiveHTTP.send,
                            userAgent: BinaryResolver.claudeUserAgent(home: home, path: envPath),
                            log: log,
