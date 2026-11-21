@@ -29,13 +29,6 @@ enum TokenRefreshCfg {
     static let maxRecords = 50
     static let model = "haiku"
     static let prompt = "Reply with the single word OK."
-    /// Environment the child must not inherit: other credentials would make
-    /// Claude Code skip the OAuth token, and Claude Code's own session markers
-    /// (when the collector is run by hand from inside a session).
-    static func isDropped(_ key: String) -> Bool {
-        ["CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDECODE"].contains(key)
-            || key.hasPrefix("CLAUDE_CODE_")
-    }
 }
 
 enum TokenRefresh {
@@ -48,19 +41,14 @@ enum TokenRefresh {
         return last.map { now.timeIntervalSince($0) >= TokenRefreshCfg.minInterval } ?? true
     }
 
-    /// The child's environment: the collector's own, minus other credentials,
-    /// with HOME/USER/LOGNAME always set from the passwd entry (never rely on
-    /// launchd for them) and CLAUDE_CONFIG_DIR only for non-default dirs.
-    /// (Setting it for `~/.claude` would change the keychain service name.)
+    /// The shared child environment (`ChildProcess.environment`: credentials
+    /// dropped, HOME/USER/LOGNAME from passwd) plus CLAUDE_CONFIG_DIR, set
+    /// only for non-default dirs. (Setting it for `~/.claude` would change
+    /// the keychain service name.)
     static func environment(configDir: String, home: String, user: String,
                             inherited: [String: String]) -> [String: String] {
-        var env = inherited.filter { !TokenRefreshCfg.isDropped($0.key) }
-        env["HOME"] = home
-        env["USER"] = user
-        env["LOGNAME"] = user
-        if (env["PATH"] ?? "").isEmpty { env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin" }
-        let path = (home as NSString).appendingPathComponent(configDir)
-        if configDir != ".claude" { env["CLAUDE_CONFIG_DIR"] = path }
+        var env = ChildProcess.environment(home: home, user: user, inherited: inherited)
+        if configDir != ".claude" { env["CLAUDE_CONFIG_DIR"] = (home as NSString).appendingPathComponent(configDir) }
         return env
     }
 
@@ -81,8 +69,7 @@ enum TokenRefresh {
                         "--tools", ""],
             environment: environment(configDir: configDir, home: ctx.home, user: ctx.user,
                                      inherited: ctx.environment),
-            workingDirectory: (CollectorStateStore.defaultPath(home: ctx.home) as NSString)
-                .deletingLastPathComponent,
+            workingDirectory: ChildProcess.workingDirectory(home: ctx.home),
             timeout: TokenRefreshCfg.timeout)
     }
 

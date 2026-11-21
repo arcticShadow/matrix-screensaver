@@ -7,8 +7,9 @@
 //
 //  SAFETY: gws derives its credential-encryption key from $USER. Run without
 //  USER it fails to decrypt and DELETES the user's stored credentials. So the
-//  child always gets USER/LOGNAME/HOME from the passwd entry, and the source
-//  refuses to launch gws at all when the user name is unknown.
+//  child always gets USER/LOGNAME/HOME from the passwd entry (the shared
+//  `ChildProcess.environment`), and the source refuses to launch gws at all
+//  when the user name is unknown.
 //
 
 import Foundation
@@ -62,21 +63,10 @@ struct CalendarSource: CollectorSource {
     static func command(gws: String, ctx: CollectorContext) -> ProcessSpec {
         ProcessSpec(executable: gws,
                     arguments: ["calendar", "+agenda", "--days", String(CalendarCfg.days), "--format", "json"],
-                    environment: environment(home: ctx.home, user: ctx.user, inherited: ctx.environment),
-                    workingDirectory: (CollectorStateStore.defaultPath(home: ctx.home) as NSString)
-                        .deletingLastPathComponent,
+                    environment: ChildProcess.environment(home: ctx.home, user: ctx.user,
+                                                          inherited: ctx.environment),
+                    workingDirectory: ChildProcess.workingDirectory(home: ctx.home),
                     timeout: CalendarCfg.timeout)
-    }
-
-    /// The collector's environment with HOME/USER/LOGNAME always set from the
-    /// passwd entry (never trust launchd for them) and a PATH fallback.
-    static func environment(home: String, user: String, inherited: [String: String]) -> [String: String] {
-        var env = inherited
-        env["HOME"] = home
-        env["USER"] = user
-        env["LOGNAME"] = user
-        if (env["PATH"] ?? "").isEmpty { env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin" }
-        return env
     }
 
     /// Agenda JSON -> events that haven't ended, by start time. gws prints

@@ -103,6 +103,22 @@ func calendarTests() {
         expectEqual(spec.environment["PATH"], "/usr/bin:/bin")
     }
 
+    test("calendar collector: gws gets the same child environment as the refresh run (credentials dropped, USER/HOME kept)") {
+        let w = FakeCollector("cal-env-shared")
+        w.sources = [CalendarSource()]
+        w.inheritedEnv = ["PATH": "/usr/bin:/bin", "LANG": "en_NZ.UTF-8", "USER": "launchd-user",
+                          "ANTHROPIC_API_KEY": "sk-x", "ANTHROPIC_AUTH_TOKEN": "x", "CLAUDE_CODE_OAUTH_TOKEN": "x",
+                          "CLAUDECODE": "1", "CLAUDE_CONFIG_DIR": "/elsewhere/.claude-beta"]
+        w.run()
+        let env = w.agendaRuns.first?.environment ?? [:]
+        expectEqual(env, ["PATH": "/usr/bin:/bin", "LANG": "en_NZ.UTF-8",
+                          "HOME": w.home, "USER": "someone", "LOGNAME": "someone"])
+        expectEqual(w.agendaRuns.first?.workingDirectory, (w.statePath as NSString).deletingLastPathComponent)
+        // Same builder as the refresh run for the default dir.
+        expectEqual(env, TokenRefresh.environment(configDir: ".claude", home: w.home, user: "someone",
+                                                  inherited: w.inheritedEnv))
+    }
+
     test("calendar collector: never launches gws without a user name (gws would wipe its credentials)") {
         let w = FakeCollector("cal-nouser")
         w.sources = [CalendarSource()]

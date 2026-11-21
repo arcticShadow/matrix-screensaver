@@ -80,6 +80,36 @@ struct ProcessSpec: Equatable {
     var timeout: TimeInterval
 }
 
+/// What every child the collector launches (`claude -p`, `gws`) starts from.
+enum ChildProcess {
+    /// Environment a child must not inherit: other credentials would make
+    /// Claude Code skip the OAuth token (and no child needs them), plus
+    /// Claude Code's own session markers (when the collector is run by hand
+    /// from inside a session).
+    static func isDropped(_ key: String) -> Bool {
+        ["CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDECODE"].contains(key)
+            || key.hasPrefix("CLAUDE_CODE_")
+    }
+
+    /// The collector's environment minus `isDropped` keys, with HOME, USER
+    /// and LOGNAME ALWAYS set from the passwd entry (never trust launchd for
+    /// them: gws keys its credential encryption on USER and wipes its
+    /// credentials without it) and a PATH fallback.
+    static func environment(home: String, user: String, inherited: [String: String]) -> [String: String] {
+        var env = inherited.filter { !isDropped($0.key) }
+        env["HOME"] = home
+        env["USER"] = user
+        env["LOGNAME"] = user
+        if (env["PATH"] ?? "").isEmpty { env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin" }
+        return env
+    }
+
+    /// Children run from the collector's state dir.
+    static func workingDirectory(home: String) -> String {
+        (CollectorStateStore.defaultPath(home: home) as NSString).deletingLastPathComponent
+    }
+}
+
 struct ProcessResult: Equatable {
     var status: Int32
     var timedOut: Bool
