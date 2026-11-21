@@ -10,6 +10,29 @@
 
 import AppKit
 
+/// The Solarized palette (see README), shared by the rain (MatrixView) and
+/// the panels. The one place colours are defined.
+enum Solarized {
+    static func hex(_ v: UInt32) -> NSColor {
+        NSColor(srgbRed: CGFloat((v >> 16) & 0xff) / 255,
+                green: CGFloat((v >> 8) & 0xff) / 255,
+                blue: CGFloat(v & 0xff) / 255, alpha: 1)
+    }
+    static let base03  = hex(0x002b36)
+    static let base02  = hex(0x073642)
+    static let base01  = hex(0x586e75)
+    static let base1   = hex(0x93a1a1)
+    static let base2   = hex(0xeee8d5)
+    static let yellow  = hex(0xb58900)
+    static let orange  = hex(0xcb4b16)
+    static let red     = hex(0xdc322f)
+    static let magenta = hex(0xd33682)
+    static let violet  = hex(0x6c71c4)
+    static let blue    = hex(0x268bd2)
+    static let cyan    = hex(0x2aa198)
+    static let green   = hex(0x859900)
+}
+
 final class PanelRenderer {
 
     struct Style {
@@ -23,20 +46,14 @@ final class PanelRenderer {
         var bannerFontSize: CGFloat = 30
     }
 
-    // Solarized palette (see README).
-    private static func hex(_ v: UInt32) -> NSColor {
-        NSColor(srgbRed: CGFloat((v >> 16) & 0xff) / 255,
-                green: CGFloat((v >> 8) & 0xff) / 255,
-                blue: CGFloat(v & 0xff) / 255, alpha: 1)
-    }
-    private let base03 = hex(0x002b36)
-    private let base02 = hex(0x073642)
-    private let base01 = hex(0x586e75)
-    private let base1  = hex(0x93a1a1)
-    private let cyan   = hex(0x2aa198)
-    private let green  = hex(0x859900)
-    private let yellow = hex(0xb58900)
-    private let red    = hex(0xdc322f)
+    private let base03 = Solarized.base03
+    private let base02 = Solarized.base02
+    private let base01 = Solarized.base01
+    private let base1  = Solarized.base1
+    private let cyan   = Solarized.cyan
+    private let green  = Solarized.green
+    private let yellow = Solarized.yellow
+    private let red    = Solarized.red
 
     let style: Style
     private let font: NSFont

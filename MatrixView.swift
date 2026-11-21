@@ -71,23 +71,16 @@ final class MatrixView: ScreenSaverView {
         #endif
     }
 
-    // MARK: - Solarized palette
-    private static func hex(_ s: String) -> NSColor {
-        var h = s; if h.hasPrefix("#") { h.removeFirst() }
-        let v = UInt32(h, radix: 16) ?? 0
-        return NSColor(srgbRed: CGFloat((v >> 16) & 0xff) / 255,
-                       green:   CGFloat((v >> 8)  & 0xff) / 255,
-                       blue:    CGFloat(v & 0xff) / 255, alpha: 1)
-    }
-    private let base03    = hex("002b36")
-    private let alertRed  = hex("dc322f")
-    private let alertWash = hex("3d0c10")   // background the rain fades toward during the banner
-    private let alertRain: [NSColor] = ["dc322f", "cb4b16", "d33682"].map(hex)
-    private let headColor = hex("eee8d5")
-    private let stream: [NSColor] = ["2aa198","268bd2","859900","6c71c4","b58900"].map(hex)
+    // MARK: - Palette (Solarized, defined once in PanelRenderer.swift)
+    private let base03    = Solarized.base03
+    private let alertRed  = Solarized.red
+    private let alertWash = Solarized.hex(0x3d0c10)   // background the rain fades toward during the banner
+    private let alertRain: [NSColor] = [Solarized.red, Solarized.orange, Solarized.magenta]
+    private let headColor = Solarized.base2
+    private let stream: [NSColor] = [Solarized.cyan, Solarized.blue, Solarized.green, Solarized.violet, Solarized.yellow]
     // Logo-stream palette — brighter warm greens & teals so the logo shape reads
     // as "materialised" from within the cooler main rain.
-    private let logoStream: [NSColor] = ["6ef0c2","86e0f5","cdeb6e"].map(hex)
+    private let logoStream: [NSColor] = [0x6ef0c2, 0x86e0f5, 0xcdeb6e].map(Solarized.hex)
 
     // MARK: - Glyph sets
     private static let bodyGlyphs: [String] = {
