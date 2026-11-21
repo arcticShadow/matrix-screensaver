@@ -35,15 +35,25 @@ enum Solarized {
 
 final class PanelRenderer {
 
+    /// Geometry and translucency. The saver fills it from its `Cfg`
+    /// (MatrixView.swift), where every rendering tunable lives.
     struct Style {
         var fontSize: CGFloat
         /// Inner padding in character cells (horizontal) / rows (vertical, fractional).
-        var padCols: CGFloat = 1.5
-        var padRows: CGFloat = 0.6
-        var lineSpacing: CGFloat = 1.35   // row height as a multiple of fontSize
-        var backgroundAlpha: CGFloat = 0.86
-        /// Centre takeover banner text size.
-        var bannerFontSize: CGFloat = 30
+        var padCols: CGFloat
+        var padRows: CGFloat
+        /// Row height as a multiple of fontSize.
+        var lineSpacing: CGFloat
+        /// Opacity of the panel's base03 plate.
+        var backgroundAlpha: CGFloat
+        /// Centre takeover banner text size (before shrinking to fit).
+        var bannerFontSize: CGFloat
+        /// The banner box is never wider than this fraction of the screen.
+        var bannerMaxWidth: CGFloat
+        /// Opacity of the banner's base03 plate.
+        var bannerPlateAlpha: CGFloat
+        /// Opacity of the cyan ghost copy drawn during glitch jitter.
+        var bannerGhostAlpha: CGFloat
     }
 
     private let base03 = Solarized.base03
@@ -96,7 +106,7 @@ final class PanelRenderer {
         bannerFont = NSFont(name: "SF Mono Bold", size: style.bannerFontSize)
             ?? NSFont.monospacedSystemFont(ofSize: style.bannerFontSize, weight: .bold)
         bannerAttrs = [.font: bannerFont, .foregroundColor: red]
-        bannerGhostAttrs = [.font: bannerFont, .foregroundColor: cyan.withAlphaComponent(0.55)]
+        bannerGhostAttrs = [.font: bannerFont, .foregroundColor: cyan.withAlphaComponent(style.bannerGhostAlpha)]
     }
 
     func size(of panel: Panel, columns: Int) -> CGSize {
@@ -226,7 +236,7 @@ final class PanelRenderer {
         let textSize = bannerSizeCache!.size
         let padX = style.bannerFontSize * 1.4, padY = style.bannerFontSize * 0.9
         // Never wider than the screen (minus a margin); shrink if the name is long.
-        let maxW = bounds.width * 0.9
+        let maxW = bounds.width * style.bannerMaxWidth
         let scale = min(1, maxW / (textSize.width + 2 * padX))
         let box = CGRect(x: bounds.midX - (textSize.width * scale + 2 * padX) / 2,
                          y: bounds.midY - (textSize.height * scale + 2 * padY) / 2,
@@ -234,7 +244,7 @@ final class PanelRenderer {
                          height: textSize.height * scale + 2 * padY).integral
         ctx.saveGState()
         ctx.setAlpha(alpha)
-        ctx.setFillColor(base03.withAlphaComponent(0.94).cgColor)
+        ctx.setFillColor(base03.withAlphaComponent(style.bannerPlateAlpha).cgColor)
         ctx.fill(box)
         ctx.setStrokeColor(red.cgColor)
         ctx.setLineWidth(3)

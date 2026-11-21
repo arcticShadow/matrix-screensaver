@@ -45,11 +45,21 @@ final class MatrixView: ScreenSaverView {
         // Diagnostic overlay (panels drawn over the rain on the main display).
         static let overlayFontSize: CGFloat = 15
         static let overlayMargin:   CGFloat = 48     // inset from the screen edge, points
+        static let overlayLineSpacing: CGFloat = 1.35   // panel row height as a multiple of overlayFontSize
+        static let overlayPadCols:  CGFloat = 1.5    // panel inner padding, character cells (horizontal)
+        static let overlayPadRows:  CGFloat = 0.6    // panel inner padding, rows (vertical)
+        static let overlayBackgroundAlpha: CGFloat = 0.86   // panel plate opacity
 
         // Attention alerts (rendering only; WHEN the banner fires — 30 s wait
         // threshold, 60 s period, 4 s duration — is decided by AlertsCfg in the core).
         static let pulsePeriod:     Double  = 1.2    // seconds per red pulse of the AGENTS border/row
         static let bannerFontSize:  CGFloat = 30
+        static let bannerMaxWidth:  CGFloat = 0.9    // banner box at most this fraction of the screen width
+        static let bannerPlateAlpha: CGFloat = 0.94  // banner plate opacity
+        static let bannerGhostAlpha: CGFloat = 0.55  // cyan ghost copy behind the jittered banner text
+        static let bannerFadeIn:    Double  = 0.15   // seconds for the banner to fade in...
+        static let bannerFadeOut:   Double  = 0.3    // ...and out
+        static let bannerJitter:    CGFloat = 8      // max sideways banner text jitter during bursts, points
         // While the banner shows, the trail fade runs toward a dark red at this
         // multiple of fadeAlpha and new rain glyphs fall red: the screen washes
         // red within the banner's ~4 s, then fades back at the normal trail rate.
@@ -58,6 +68,8 @@ final class MatrixView: ScreenSaverView {
         static let glitchTailBurst: Double  = 0.3    // ...and at its end
         static let glitchBands:     Int     = 6      // displaced rain slices per burst frame
         static let glitchShift:     CGFloat = 70     // max horizontal slice displacement, points
+        static let glitchBandHeight: ClosedRange<CGFloat> = 4...46       // slice height, points
+        static let glitchFlashAlpha: ClosedRange<CGFloat> = 0.12...0.35  // red flash over each slice
         // Burn-in protection: seconds before both panels step one corner clockwise.
         static let panelRotationInterval: TimeInterval = 600
         // Minimum gap kept between a panel and the logo's glyph cells, points.
@@ -247,7 +259,14 @@ final class MatrixView: ScreenSaverView {
         let main = isMainDisplay
         overlayActive = !isPreview && main && (diagnostics?.overlayEnabled ?? false)
         if overlayActive, panelRenderer == nil {
-            panelRenderer = PanelRenderer(style: .init(fontSize: Cfg.overlayFontSize, bannerFontSize: Cfg.bannerFontSize))
+            panelRenderer = PanelRenderer(style: .init(fontSize: Cfg.overlayFontSize,
+                                                       padCols: Cfg.overlayPadCols, padRows: Cfg.overlayPadRows,
+                                                       lineSpacing: Cfg.overlayLineSpacing,
+                                                       backgroundAlpha: Cfg.overlayBackgroundAlpha,
+                                                       bannerFontSize: Cfg.bannerFontSize,
+                                                       bannerMaxWidth: Cfg.bannerMaxWidth,
+                                                       bannerPlateAlpha: Cfg.bannerPlateAlpha,
+                                                       bannerGhostAlpha: Cfg.bannerGhostAlpha))
         }
         // Only a view that shows the overlay holds a lease on the shared poller.
         if overlayActive { diagnostics?.startPolling() } else { diagnostics?.stopPolling() }
@@ -538,16 +557,17 @@ final class MatrixView: ScreenSaverView {
             }
             if let banner {
                 renderer.drawBanner(banner.text, in: bounds, alpha: glitchEnvelope(banner),
-                                    jitter: inBurst(banner) && Bool.random() ? CGFloat.random(in: -8...8) : 0)
+                                    jitter: inBurst(banner) && Bool.random()
+                                        ? CGFloat.random(in: -Cfg.bannerJitter...Cfg.bannerJitter) : 0)
             }
         }
     }
 
     // MARK: - Attention glitch
 
-    /// 0→1 over the first 0.15 s, 1→0 over the last 0.3 s.
+    /// 0→1 over the first `bannerFadeIn` s, 1→0 over the last `bannerFadeOut` s.
     private func glitchEnvelope(_ b: AlertBanner) -> CGFloat {
-        CGFloat(max(0, min(1, b.elapsed / 0.15, (b.duration - b.elapsed) / 0.3)))
+        CGFloat(max(0, min(1, b.elapsed / Cfg.bannerFadeIn, (b.duration - b.elapsed) / Cfg.bannerFadeOut)))
     }
 
     private func inBurst(_ b: AlertBanner) -> Bool {
@@ -559,13 +579,13 @@ final class MatrixView: ScreenSaverView {
     /// already made, so the cost is proportional to the slices' area.
     private func drawGlitch(_ ctx: CGContext, rain img: CGImage) {
         for _ in 0..<Cfg.glitchBands {
-            let h = CGFloat.random(in: 4...46)
+            let h = CGFloat.random(in: Cfg.glitchBandHeight)
             let band = CGRect(x: bounds.minX, y: CGFloat.random(in: bounds.minY...(bounds.maxY - h)),
                               width: bounds.width, height: h)
             ctx.saveGState()
             ctx.clip(to: band)
             ctx.draw(img, in: bounds.offsetBy(dx: CGFloat.random(in: -Cfg.glitchShift...Cfg.glitchShift), dy: 0))
-            ctx.setFillColor(alertRed.withAlphaComponent(CGFloat.random(in: 0.12...0.35)).cgColor)
+            ctx.setFillColor(alertRed.withAlphaComponent(CGFloat.random(in: Cfg.glitchFlashAlpha)).cgColor)
             ctx.fill(band)
             ctx.restoreGState()
         }

@@ -112,15 +112,23 @@ This explicit buffer is necessary because `ScreenSaverView.draw()` does not guar
 | `fadeAlpha` | `0.018` | Trail length — lower = longer, glowier trails |
 | `overlayFontSize` | `15` | Overlay text size (points) |
 | `overlayMargin` | `48` | Overlay inset from the screen edge (points) |
+| `overlayLineSpacing` | `1.35` | Panel row height as a multiple of `overlayFontSize` |
+| `overlayPadCols` / `overlayPadRows` | `1.5` / `0.6` | Panel inner padding (character cells / rows) |
+| `overlayBackgroundAlpha` | `0.86` | Panel plate opacity |
 | `panelRotationInterval` | `600` | Seconds before both panels step one corner clockwise (burn-in protection) |
 | `logoClearance` | `16` | Minimum gap between the AGENTS panel and the logo's glyph cells (points) |
 | `PanelLayout.sysColumns` / `agentsColumns` | `34` / `52` | Panel widths in monospace cells (`Diagnostics/Layout.swift`) |
 | `AlertsCfg.waitThreshold` / `bannerPeriod` / `bannerDuration` | `30 s` / `60 s` / `4 s` | When the takeover banner fires (`Diagnostics/Alerts.swift`) |
 | `pulsePeriod` | `1.2 s` | AGENTS border / ATTENTION row red pulse |
-| `bannerFontSize` | `30` | Takeover banner text size (shrinks to fit 90 % of the width) |
+| `bannerFontSize` | `30` | Takeover banner text size (shrinks so the box fits `bannerMaxWidth`) |
+| `bannerMaxWidth` | `0.9` | Banner box at most this fraction of the screen width (padding included) |
+| `bannerPlateAlpha` / `bannerGhostAlpha` | `0.94` / `0.55` | Banner plate opacity / cyan ghost copy during jitter |
+| `bannerFadeIn` / `bannerFadeOut` | `0.15 s` / `0.3 s` | Banner fade at its start / end |
+| `bannerJitter` | `8` | Max sideways banner text jitter during bursts (points) |
 | `glitchWashRate` | `1.5` | Red wash speed during the banner (× `fadeAlpha`) |
 | `glitchBurst` / `glitchTailBurst` | `0.8 s` / `0.3 s` | Slice-glitch bursts at the banner's start / end |
 | `glitchBands` / `glitchShift` | `6` / `70` | Displaced rain slices per burst frame / max shift (points) |
+| `glitchBandHeight` / `glitchFlashAlpha` | `4…46` / `0.12…0.35` | Slice height (points) / red flash opacity per slice |
 | `AgentsCfg.awaitingWindow` | `15 min` | Idle sessions younger than this are AWAITING, older ones DORMANT (`Diagnostics/AgentsPanel.swift`) |
 | `BackgroundCfg.subagentFreshness` | `5 min` | An unfinished subagent counts only if its transcript changed this recently (crash guard) (`Diagnostics/BackgroundAgents.swift`) |
 | `BackgroundCfg.fallbackRetry` | `60 s` | How long a failed cwd-fallback lookup for a session is cached before the project dirs are listed again |
