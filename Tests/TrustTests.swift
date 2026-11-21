@@ -202,6 +202,23 @@ func trustTests() {
         let s = Sample(value: WiFiStatus(ssid: "TrustedNet"), fetchedAt: Date())
         expect(!"\(s)".contains("TrustedNet") && !String(reflecting: s).contains("TrustedNet"), "\(s)")
     }
+
+    test("trust: the takeover banner names the session through the trust-aware namer") {
+        for (wifi, trusted) in [("TrustedNet", true), (nil, false), ("CoffeeShop", false)] as [(String?, Bool)] {
+            let w = FakeWorld("trust-banner")
+            w.writeConfig(trustedConfig)
+            w.wifi = wifi
+            w.writeTrustSessions()   // pid 2 (beta-lib worktree) has waited 40 s on an approval
+            let b = w.trustCore().banner()
+            guard let name = b?.name else { expect(false, "no banner for wifi \(wifi ?? "nil")"); continue }
+            if trusted {
+                expectEqual(name, "beta-lib")
+            } else {
+                expect(isCodename(name), "untrusted/unverified banner must use a codename, got \(name)")
+                expect(!(b?.text ?? "").contains("beta"), "banner leaked the repo name: \(b?.text ?? "")")
+            }
+        }
+    }
 }
 
 extension SessionRecord {

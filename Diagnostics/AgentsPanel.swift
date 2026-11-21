@@ -112,7 +112,8 @@ enum AgentsPanel {
         header += [
             .field("RUNNING", "\(live.count)"),
             .field("ACTIVE", "\(active)", active > 0 ? .ok : .dim),
-            .field("ATTENTION", "\(attention)", attention > 0 ? .alert : .dim),
+            PanelLine(style: .field, label: "ATTENTION", value: "\(attention)",
+                      severity: attention > 0 ? .alert : .dim, pulse: attention > 0),
             .field("AWAITING", "\(awaiting)", awaiting > 0 ? .warn : .dim),
             .field("DORMANT", "\(dormant)", .dim),
             .field("BACKGROUND", "\(background)", background > 0 ? .ok : .dim),
@@ -138,7 +139,7 @@ enum AgentsPanel {
         if rows.isEmpty, tail.isEmpty { tail.append(.text("NO LIVE SESSIONS", .dim)) }
 
         let lines = fit(header: header, compact: compact, rows: rows, tail: tail, budget: inp.maxLines)
-        return Panel(title: "AGENTS", lines: lines)
+        return Panel(title: "AGENTS", lines: lines, pulse: attention > 0)
     }
 
     /// The line budget is a hard cap (the panel never grows into the logo).

@@ -19,6 +19,8 @@ final class PanelRenderer {
         var padRows: CGFloat = 0.6
         var lineSpacing: CGFloat = 1.35   // row height as a multiple of fontSize
         var backgroundAlpha: CGFloat = 0.86
+        /// Centre takeover banner text size.
+        var bannerFontSize: CGFloat = 30
     }
 
     // Solarized palette (see README).
@@ -49,6 +51,11 @@ final class PanelRenderer {
     private let titleAttrs: [NSAttributedString.Key: Any]
     private let sectionAttrs: [NSAttributedString.Key: Any]
     private let valueAttrs: [Severity: [NSAttributedString.Key: Any]]
+    private let pulseAttrs: [NSAttributedString.Key: Any]
+    private let bannerFont: NSFont
+    private let bannerAttrs: [NSAttributedString.Key: Any]
+    private let bannerGhostAttrs: [NSAttributedString.Key: Any]
+    private var bannerSizeCache: (text: String, size: CGSize)?
 
     init(style: Style) {
         self.style = style
@@ -68,6 +75,11 @@ final class PanelRenderer {
             .alert:  [.font: boldFont, .foregroundColor: red],
             .dim:    [.font: font, .foregroundColor: base01],
         ]
+        pulseAttrs = [.font: boldFont, .foregroundColor: red]
+        bannerFont = NSFont(name: "SF Mono Bold", size: style.bannerFontSize)
+            ?? NSFont.monospacedSystemFont(ofSize: style.bannerFontSize, weight: .bold)
+        bannerAttrs = [.font: bannerFont, .foregroundColor: red]
+        bannerGhostAttrs = [.font: bannerFont, .foregroundColor: cyan.withAlphaComponent(0.55)]
     }
 
     func size(of panel: Panel, columns: Int) -> CGSize {
@@ -82,8 +94,9 @@ final class PanelRenderer {
 
     /// Draw a placed panel (corner + width decided by the core's PanelLayout)
     /// in `bounds`, inset by `margin` points. Must be called with the target as
-    /// the current NSGraphicsContext.
-    func draw(_ placed: PlacedPanel, in bounds: CGRect, margin: CGFloat) {
+    /// the current NSGraphicsContext. `pulse` (0…1) is the current phase of the
+    /// attention pulse, applied to whatever the model marks as pulsing.
+    func draw(_ placed: PlacedPanel, in bounds: CGRect, margin: CGFloat, pulse: CGFloat = 0) {
         let panel = placed.panel, corner = placed.corner, columns = placed.columns
         let sz = size(of: panel, columns: columns)
         let x: CGFloat, y: CGFloat
@@ -93,10 +106,10 @@ final class PanelRenderer {
         case .bottomRight: x = bounds.maxX - margin - sz.width; y = bounds.minY + margin
         case .bottomLeft:  x = bounds.minX + margin;            y = bounds.minY + margin
         }
-        draw(panel, columns: columns, in: CGRect(origin: CGPoint(x: x, y: y), size: sz))
+        draw(panel, columns: columns, in: CGRect(origin: CGPoint(x: x, y: y), size: sz), pulse: pulse)
     }
 
-    private func draw(_ panel: Panel, columns: Int, in box: CGRect) {
+    private func draw(_ panel: Panel, columns: Int, in box: CGRect, pulse: CGFloat) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         let box = box.integral
 
@@ -115,6 +128,18 @@ final class PanelRenderer {
             ctx.addLine(to: CGPoint(x: cx, y: cy + dy * tick))
         }
         ctx.strokePath()
+        if panel.pulse {
+            // Red frame breathing over the hairline, plus a faint outer glow.
+            ctx.saveGState()
+            ctx.setAlpha(0.25 + 0.75 * pulse)
+            ctx.setStrokeColor(red.cgColor)
+            ctx.setLineWidth(2)
+            ctx.stroke(box.insetBy(dx: 1, dy: 1))
+            ctx.setAlpha(0.35 * pulse)
+            ctx.setLineWidth(4)
+            ctx.stroke(box.insetBy(dx: -3, dy: -3))
+            ctx.restoreGState()
+        }
 
         let left = box.minX + style.padCols * cellW
         let width = CGFloat(columns) * cellW
@@ -142,6 +167,13 @@ final class PanelRenderer {
                 (line.label as NSString).draw(at: p, withAttributes: valueAttrs[line.severity] ?? labelAttrs)
             case .field:
                 drawField(line, columns: columns, at: p)
+                if line.pulse {
+                    // The row's label flashes red over its normal colour.
+                    ctx.saveGState()
+                    ctx.setAlpha(pulse)
+                    (line.label as NSString).draw(at: p, withAttributes: pulseAttrs)
+                    ctx.restoreGState()
+                }
             }
         }
     }
@@ -157,6 +189,41 @@ final class PanelRenderer {
         let valX = p.x + CGFloat(cols - value.count) * cellW
         (value as NSString).draw(at: CGPoint(x: valX, y: p.y),
                                  withAttributes: valueAttrs[line.severity] ?? labelAttrs)
+    }
+
+    /// Centre takeover banner: `text` in red on an opaque plate with a red
+    /// double frame. `alpha` fades it in/out; `jitter` (points) shifts the
+    /// text sideways with a cyan ghost copy for the glitch bursts.
+    func drawBanner(_ text: String, in bounds: CGRect, alpha: CGFloat, jitter: CGFloat) {
+        guard let ctx = NSGraphicsContext.current?.cgContext, alpha > 0 else { return }
+        let str = text as NSString
+        if bannerSizeCache?.text != text { bannerSizeCache = (text, str.size(withAttributes: bannerAttrs)) }
+        let textSize = bannerSizeCache!.size
+        let padX = style.bannerFontSize * 1.4, padY = style.bannerFontSize * 0.9
+        // Never wider than the screen (minus a margin); shrink if the name is long.
+        let maxW = bounds.width * 0.9
+        let scale = min(1, maxW / (textSize.width + 2 * padX))
+        let box = CGRect(x: bounds.midX - (textSize.width * scale + 2 * padX) / 2,
+                         y: bounds.midY - (textSize.height * scale + 2 * padY) / 2,
+                         width: textSize.width * scale + 2 * padX,
+                         height: textSize.height * scale + 2 * padY).integral
+        ctx.saveGState()
+        ctx.setAlpha(alpha)
+        ctx.setFillColor(base03.withAlphaComponent(0.94).cgColor)
+        ctx.fill(box)
+        ctx.setStrokeColor(red.cgColor)
+        ctx.setLineWidth(3)
+        ctx.stroke(box.insetBy(dx: 1.5, dy: 1.5))
+        ctx.setLineWidth(1)
+        ctx.stroke(box.insetBy(dx: 7.5, dy: 7.5))
+        let origin = CGPoint(x: box.minX + padX, y: box.minY + padY)
+        ctx.translateBy(x: origin.x, y: origin.y)
+        ctx.scaleBy(x: scale, y: scale)
+        if jitter != 0 {
+            str.draw(at: CGPoint(x: -jitter * 0.6, y: 0), withAttributes: bannerGhostAttrs)
+        }
+        str.draw(at: CGPoint(x: jitter, y: 0), withAttributes: bannerAttrs)
+        ctx.restoreGState()
     }
 
     private func drawRule(_ ctx: CGContext, x: CGFloat, y: CGFloat, width: CGFloat, color: NSColor) {
