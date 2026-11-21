@@ -28,10 +28,11 @@ final class DiagnosticsCore {
     let showDebug: Bool
     /// Codename salt holder (salt from config or per-run random); see `namer`.
     private let baseNamer: DisplayNamer
-    /// AGENTS panel height budget in lines, for the corner AGENTS occupies
-    /// now. `layout(agentsLineCapacity:)` sets it from the renderer's
-    /// per-corner (logo-aware) capacity.
+    /// Panel height budgets in lines, for the corners SYS and AGENTS occupy
+    /// now. `layout(lineCapacity:)` sets them from the renderer's per-corner
+    /// (logo-aware) capacity.
     var agentsMaxLines = 40
+    var sysMaxLines = 40
     /// Burn-in rotation of the panel corners (the saver sets its `Cfg` interval).
     var rotation = PanelRotation()
 
@@ -122,7 +123,8 @@ final class DiagnosticsCore {
                             saverStart: saverStart, timeZone: env.timeZone())
         inp.vitals = section(snap.vitals, SourceIDs.vitals, snap, now)
         inp.power = section(snap.power, SourceIDs.power, snap, now)
-        inp.usage = UsageBlock.lines(snap.collector?.value, config: config, now: now)
+        inp.usage = UsageBlock.content(snap.collector?.value, config: config, now: now)
+        inp.maxLines = sysMaxLines
         inp.calendar = CalendarBlock.lines(snap.collector?.value, trusted: networkTrust(snap, now).isTrusted,
                                            now: now, timeZone: inp.timeZone)
         inp.flavour = Flavour.lines(now: now)
@@ -135,12 +137,16 @@ final class DiagnosticsCore {
     }
 
     /// Panels with their screen placement (the one place corners are decided).
-    /// `agentsLineCapacity` gives the AGENTS line budget for a corner (the
-    /// renderer knows the screen and the logo); it is asked for the corner
-    /// AGENTS occupies right now, so the roster cap follows the rotation.
-    func layout(agentsLineCapacity: ((PanelCorner) -> Int)? = nil) -> [PlacedPanel] {
+    /// `lineCapacity(corner, columns)` gives the line budget of a panel that
+    /// wide anchored at that corner (the renderer knows the screen and the
+    /// logo); it is asked for the corners SYS and AGENTS occupy right now, so
+    /// both caps follow the rotation.
+    func layout(lineCapacity: ((PanelCorner, Int) -> Int)? = nil) -> [PlacedPanel] {
         let now = env.now()
-        if let cap = agentsLineCapacity { agentsMaxLines = cap(rotation.agentsCorner(at: now)) }
+        if let cap = lineCapacity {
+            agentsMaxLines = cap(rotation.agentsCorner(at: now), PanelLayout.agentsColumns)
+            sysMaxLines = cap(rotation.sysCorner(at: now), PanelLayout.sysColumns)
+        }
         return PanelLayout.place(panels(), now: now, rotation: rotation)
     }
 

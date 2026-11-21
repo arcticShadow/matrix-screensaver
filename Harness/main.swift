@@ -91,6 +91,21 @@ func fakeUsageState() -> CollectorState {
                           ]))
 }
 
+/// Many accounts (fake dirs): more usage lines than SYS has room for, with
+/// one red and one amber account among calm ones, plus a calendar.
+func manyAccountsState() -> CollectorState {
+    var st = withCalendar(fakeUsageState(), startsIn: 22 * 60)
+    let extra: [(String, Double)] = [("delta", 22), ("epsilon", 96), ("zeta", 41), ("eta", 15),
+                                     ("theta", 83), ("iota", 8), ("kappa", 30), ("lambda", 54)]
+    st.usage?.accounts += extra.map { name, five in
+        AccountUsage(dir: ".claude-\(name)", token: .ok, tokenExpiresAt: t0.addingTimeInterval(3600),
+                     generatedAt: t0.addingTimeInterval(-40),
+                     fiveHour: UsageWindow(utilization: five, resetsAt: t0.addingTimeInterval(3 * 3600)),
+                     sevenDay: UsageWindow(utilization: five / 2, resetsAt: t0.addingTimeInterval(5 * 86400)))
+    }
+    return st
+}
+
 /// One fake session file (neutral names and paths only).
 struct HarnessSession {
     var dir = ".claude"
@@ -173,6 +188,10 @@ let scenarios = [
              sessions: [.init(pid: 4101, cwd: "/home/demo/code/an-extremely-long-repository-name", status: "waiting",
                               waitingFor: "approve NotebookEdit: x", ago: 25)],
              frames: 210, wifi: "TrustedNet", viewSize: NSSize(width: 1024, height: 640), bannerMustFit: 0.9),
+    // SYS line budget: 11 accounts at 1440x900 with a busy AGENTS roster;
+    // flavour lines go, calm accounts fold into `+N ACCOUNTS`.
+    Scenario(name: "sys-many-accounts", configJSON: #"{ "codenameSalt": "harness-demo" }"#,
+             sessions: demoSessions, collector: manyAccountsState()),
     // Trusted network: real (fake) repo names. Unreadable Wi-Fi: codenames + NET UNVERIFIED.
     Scenario(name: "agents-trusted",
              configJSON: #"{ "codenameSalt": "harness-demo", "trustedSSIDs": ["TrustedNet"] }"#,

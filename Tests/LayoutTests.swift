@@ -69,17 +69,21 @@ func layoutTests() {
         expectEqual(corners(core)["SYS"], .bottomLeft)
     }
 
-    test("rotation: the AGENTS line budget is asked for AGENTS' current corner") {
+    test("rotation: the AGENTS and SYS line budgets are asked for their current corners") {
         let w = FakeWorld("rot-capacity", now: cycleStart(600))
         for i in 1...30 { w.writeSession(FakeSession(pid: Int32(i), cwd: "/r/\(i)", status: "busy")) }
         let core = DiagnosticsCore(env: w.agentsEnv(), polling: .manual)
         core.pollNow()
         let budget: [PanelCorner: Int] = [.topLeft: 12, .topRight: 20, .bottomRight: 9, .bottomLeft: 16]
         for _ in 0..<4 {
-            var asked: [PanelCorner] = []
-            let placed = core.layout { asked.append($0); return budget[$0]! }
+            var asked: [String] = []
+            let placed = core.layout { corner, cols in
+                asked.append("\(corner) \(cols)")
+                return cols == PanelLayout.agentsColumns ? budget[corner]! : 40
+            }
             let agents = placed.first { $0.panel.title == "AGENTS" }!
-            expectEqual(asked, [agents.corner])
+            let sys = placed.first { $0.panel.title == "SYS" }!
+            expectEqual(asked, ["\(agents.corner) 52", "\(sys.corner) 34"])
             expectEqual(agents.panel.lines.count, budget[agents.corner]!)
             w.advance(600)
         }

@@ -42,6 +42,23 @@ enum CollectorReader {
     }
 }
 
+/// The CLAUDE.USAGE block, kept in per-account pieces so the SYS panel can
+/// fold accounts into `+N ACCOUNTS` when it runs out of lines.
+struct UsageContent: Equatable {
+    /// Section heading (plus COLLECTOR OFFLINE / NO ACCOUNTS); empty = not shown.
+    var head: [PanelLine] = []
+    var accounts: [UsageAccountLines] = []
+
+    var lines: [PanelLine] { head + accounts.flatMap(\.lines) }
+}
+
+struct UsageAccountLines: Equatable {
+    var lines: [PanelLine]
+    /// `.alert` / `.warn` when one of its meters is red / amber, else nil.
+    /// Such accounts are the last to be folded away.
+    var attention: Severity? = nil
+}
+
 enum UsageBlock {
     static let title = "CLAUDE.USAGE"
     static let warnAt = 75
@@ -52,8 +69,12 @@ enum UsageBlock {
 
     /// `reading` nil = not read yet (or never readable).
     static func lines(_ reading: CollectorReading?, config: DiagConfig, now: Date) -> [PanelLine] {
+        content(reading, config: config, now: now).lines
+    }
+
+    static func content(_ reading: CollectorReading?, config: DiagConfig, now: Date) -> UsageContent {
         guard let state = reading?.state, let usage = state.usage else {
-            return [.section(title), .text("COLLECTOR OFFLINE", .dim)]
+            return UsageContent(head: [.section(title), .text("COLLECTOR OFFLINE", .dim)])
         }
         let refresh = state.schedules[CollectorSourceIDs.usage]?.refreshInterval ?? defaultRefresh
         let staleAfter = SourceSchedule.staleFactor * refresh
@@ -63,28 +84,35 @@ enum UsageBlock {
         if let g = usage.generatedAt, isOld(g) {
             marker = SysPanel.staleMarker(age: now.timeIntervalSince(g))
         }
-        var out: [PanelLine] = [.section(title, marker: marker)]
+        var out = UsageContent(head: [.section(title, marker: marker)])
         let shown = usage.accounts.filter {
             $0.token != .none || (reading?.dirsWithSessions.contains($0.dir) ?? false)
         }
-        if shown.isEmpty { out.append(.text("NO ACCOUNTS", .dim)) }
+        if shown.isEmpty { out.head.append(.text("NO ACCOUNTS", .dim)) }
         for a in shown {
-            let tag = ProfileTags.tag(configDir: a.dir, overrides: config.profileTags)
-            if a.token == .none {
-                out.append(.field("\(tag).TOKEN", "NO TOKEN", .dim))
-                continue
-            }
-            let stale = a.token != .ok || isOld(a.generatedAt)
-            if stale { out.append(.field("\(tag).STATE", "STALE", .warn)) }
-            guard a.fiveHour != nil || a.sevenDay != nil else {
-                out.append(.field("\(tag).USAGE", "NO SIGNAL", .dim))
-                continue
-            }
-            if let w = a.fiveHour { out.append(meterLine("\(tag).5H", w, stale: stale, now: now)) }
-            if let w = a.sevenDay { out.append(meterLine("\(tag).7D", w, stale: stale, now: now)) }
-            if let x = a.extra, x.enabled { out.append(.field("\(tag).XTRA", xtra(x), stale ? .dim : .normal)) }
+            out.accounts.append(accountLines(a, config: config, now: now, isOld: isOld))
         }
         return out
+    }
+
+    private static func accountLines(_ a: AccountUsage, config: DiagConfig, now: Date,
+                                     isOld: (Date?) -> Bool) -> UsageAccountLines {
+        let tag = ProfileTags.tag(configDir: a.dir, overrides: config.profileTags)
+        if a.token == .none { return UsageAccountLines(lines: [.field("\(tag).TOKEN", "NO TOKEN", .dim)]) }
+        var out: [PanelLine] = []
+        let stale = a.token != .ok || isOld(a.generatedAt)
+        if stale { out.append(.field("\(tag).STATE", "STALE", .warn)) }
+        guard a.fiveHour != nil || a.sevenDay != nil else {
+            return UsageAccountLines(lines: out + [.field("\(tag).USAGE", "NO SIGNAL", .dim)])
+        }
+        let meters = [("5H", a.fiveHour), ("7D", a.sevenDay)].compactMap { label, w in
+            w.map { meterLine("\(tag).\(label)", $0, stale: stale, now: now) }
+        }
+        out += meters
+        if let x = a.extra, x.enabled { out.append(.field("\(tag).XTRA", xtra(x), stale ? .dim : .normal)) }
+        let levels = Set(meters.map(\.severity))
+        let attention: Severity? = levels.contains(.alert) ? .alert : levels.contains(.warn) ? .warn : nil
+        return UsageAccountLines(lines: out, attention: attention)
     }
 
     static func meterLine(_ label: String, _ w: UsageWindow, stale: Bool, now: Date) -> PanelLine {
