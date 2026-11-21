@@ -17,6 +17,8 @@ struct SysInputs: Equatable {
     /// Polled sections. nil = section not shown.
     var vitals: SectionData<HostVitals>? = nil
     var power: SectionData<PowerStatus>? = nil
+    /// CLAUDE.USAGE block (see UsageBlock); empty = not shown.
+    var usage: [PanelLine] = []
     /// Atmosphere lines (see Flavour).
     var flavour: [String] = []
     /// Per-source fetch stats; empty = debug lines hidden.
@@ -66,6 +68,7 @@ enum SysPanel {
             lines.append(.section("POWER", marker: p.staleMarker))
             lines.append(powerLine(pct, onAC: onAC, charging: charging))
         }
+        lines.append(contentsOf: inp.usage)
         if !inp.flavour.isEmpty {
             lines.append(.rule)
             lines.append(contentsOf: inp.flavour.enumerated().map {
