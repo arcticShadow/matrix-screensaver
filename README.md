@@ -73,6 +73,10 @@ account and a CALENDAR line: the next upcoming timed event
 (`NEXT 14:30 Standup (in 22m)`, amber within 5 minutes) or `NOW ▸ <title>` while
 one is in progress. All-day events are skipped. Event titles follow the same
 trusted-network rule as repo names and read `EVENT` anywhere else.
+SYS never grows into the logo or off the screen either: with many accounts it
+drops the flavour lines first, then folds the calmest accounts into a
+`+N ACCOUNTS` line (accounts near a limit stay listed longest); the clock and
+date always show.
 
 Real repo names replace the codenames only on a **trusted network**: when the
 current Wi-Fi name can be read and is one of the `trustedSSIDs` in your config
