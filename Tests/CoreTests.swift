@@ -22,6 +22,10 @@ final class FakeWorld {
     var powerDuration: TimeInterval = 0.002
     var powerFail = false
     var powerCalls = 0
+    /// Injected Wi-Fi reader: the name it returns (nil = unreadable) or a throw.
+    var wifi: String? = nil
+    var wifiFail = false
+    var wifiCalls = 0
     struct FakeFailure: Error {}
 
     init(_ name: String, now: Date = Date(timeIntervalSince1970: 1_795_271_405)) {
@@ -48,6 +52,11 @@ final class FakeWorld {
                                    self.now = self.now.addingTimeInterval(self.powerDuration)
                                    if self.powerFail { throw FakeFailure() }
                                    return self.power
+                               },
+                               readWiFi: { [unowned self] in
+                                   self.wifiCalls += 1
+                                   if self.wifiFail { throw FakeFailure() }
+                                   return self.wifi
                                })
     }
     func advance(_ s: TimeInterval) { now = now.addingTimeInterval(s) }

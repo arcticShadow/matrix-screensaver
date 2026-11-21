@@ -105,8 +105,10 @@ enum AgentsPanel {
         let dormant = count { $0 == .dormant }
         let background = live.reduce(scan.unattributedBackground) { $0 + $1.record.background }
 
-        var lines: [PanelLine] = [
-            .field("AGENT.LINK", "ONLINE", .ok),
+        var lines: [PanelLine] = [.field("AGENT.LINK", "ONLINE", .ok)]
+        // Wi-Fi name unreadable: names stay codenames, and say why.
+        if inp.namer.trust == .unverified { lines.append(.field("NET", "UNVERIFIED", .warn)) }
+        lines += [
             .field("RUNNING", "\(live.count)"),
             .field("ACTIVE", "\(active)", active > 0 ? .ok : .dim),
             PanelLine(style: .field, label: "ATTENTION", value: "\(attention)",

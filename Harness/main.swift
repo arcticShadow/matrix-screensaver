@@ -54,6 +54,8 @@ struct Scenario {
     var sessions: [HarnessSession] = []
     /// Frames to render (nil = the command-line count).
     var frames: Int? = nil
+    /// What the fake Wi-Fi reader returns (nil = unreadable). Made-up names only.
+    var wifi: String? = nil
     /// Collector state file written into the fake home (nil = none: COLLECTOR OFFLINE).
     var collector: CollectorState? = nil
     /// Clock start (default t0).
@@ -159,6 +161,13 @@ let scenarios = [
              sessions: alertSessions, frames: 210),
     Scenario(name: "alert-after", configJSON: #"{ "codenameSalt": "harness-demo" }"#,
              sessions: alertSessions, frames: 300),
+    // Trusted network: real (fake) repo names. Unreadable Wi-Fi: codenames + NET UNVERIFIED.
+    Scenario(name: "agents-trusted",
+             configJSON: #"{ "codenameSalt": "harness-demo", "trustedSSIDs": ["TrustedNet"] }"#,
+             sessions: demoSessions, wifi: "TrustedNet"),
+    Scenario(name: "agents-unverified",
+             configJSON: #"{ "codenameSalt": "harness-demo", "trustedSSIDs": ["TrustedNet"] }"#,
+             sessions: demoSessions, wifi: nil),
     Scenario(name: "overlay-usage", collector: fakeUsageState()),
 ] + realUsageScenario()
 
@@ -212,7 +221,7 @@ func makeWorld(_ s: Scenario, clock: Clock) -> DiagnosticsEnvironment {
         }
     }
     let dead = Set(s.sessions.filter { !$0.alive }.map(\.pid))
-    let thermal = s.thermal, power = s.power, failAfterFirst = s.vitalsFailAfterFirst
+    let thermal = s.thermal, power = s.power, failAfterFirst = s.vitalsFailAfterFirst, wifi = s.wifi
     var env = DiagnosticsEnvironment(now: { clock.now },
                                   homeDirectory: home,
                                   configPath: cfg,
@@ -227,6 +236,7 @@ func makeWorld(_ s: Scenario, clock: Clock) -> DiagnosticsEnvironment {
                                   },
                                   readPower: { power })
     env.isProcessAlive = { pid, _ in !dead.contains(pid) }
+    env.readWiFi = { wifi }
     return env
 }
 

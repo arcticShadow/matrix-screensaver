@@ -67,6 +67,13 @@ pulse red. Once a session has waited 30 s, a centre takeover banner
 60 s, cycling oldest-first through the waiting sessions, while the rain glitches
 and washes red behind it. Usage limits and calendar are on the way — see issue #1.
 
+Real repo names replace the codenames only on a **trusted network**: when the
+current Wi-Fi name can be read and is one of the `trustedSSIDs` in your config
+(checked every 30 s). Anywhere else the roster keeps codenames. If the Wi-Fi
+name can't be read at all (Wi-Fi off, wired, macOS redaction, any error) the
+panel also shows `NET UNVERIFIED`. With no `trustedSSIDs` it always uses
+codenames.
+
 To turn it off without rebuilding, create `~/.config/matrix-diag/config.json`:
 
 ```json
@@ -74,8 +81,15 @@ To turn it off without rebuilding, create `~/.config/matrix-diag/config.json`:
 ```
 
 The file is optional (missing or malformed → defaults) and is read at each
-activation. It is personal and never committed. Other keys reserved by the spec
-(`trustedSSIDs`, `codenameSalt`, `profileTags`) are accepted and ignored for now.
+activation. It is personal and never committed. Other keys:
+
+```json
+{
+  "trustedSSIDs": ["<your home Wi-Fi name>"],
+  "codenameSalt": "<any random string, keeps codenames stable>",
+  "profileTags": { ".claude-xyz": "LAB" }
+}
+```
 
 ## Solarized Dark palette
 
