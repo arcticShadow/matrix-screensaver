@@ -2,9 +2,10 @@
 //  Naming.swift
 //  Everything that decides what a session is CALLED on screen:
 //  - `DisplayNamer.name(for:)`: the single decision point for a session's
-//    display name. Always a codename for now (fail closed); the trusted-network
-//    ticket switches it to the real repo name here and nowhere else.
+//    display name: the real repo name on a trusted network (`NetworkTrust`,
+//    see Network.swift), otherwise a codename (fail closed).
 //  - `Codename`: stable `WORD-WORD` from a salted HMAC of the cwd.
+//  - `RepoName`: the real repo name shown on a trusted network.
 //  - `ProfileTags`: config dir basename -> 3-letter tag, so no folder name
 //    reaches the screen.
 //
@@ -15,14 +16,38 @@ import CommonCrypto
 struct DisplayNamer {
     /// Codename salt: the config's `codenameSalt`, else a per-run random salt.
     let salt: String
+    /// The network trust this namer applies. Defaults to fail closed; the
+    /// core hands out namers carrying its current decision.
+    var trust: NetworkTrust = .unverified
 
-    init(salt: String?) {
+    init(salt: String?, trust: NetworkTrust = .unverified) {
         self.salt = salt ?? UUID().uuidString
+        self.trust = trust
     }
 
-    /// THE display name decision. Real names (trusted Wi-Fi) plug in here.
+    /// THE display name decision: real repo name only on a trusted network.
     func name(for session: SessionRecord) -> String {
-        Codename.make(cwd: session.cwd, salt: salt)
+        if trust.isTrusted, let real = RepoName.make(cwd: session.cwd) { return real }
+        return Codename.make(cwd: session.cwd, salt: salt)
+    }
+}
+
+enum RepoName {
+    /// Same width budget as the longest codename, so roster rows still fit.
+    static let maxLength = (Codename.first.map(\.count).max() ?? 6) + 1 + (Codename.second.map(\.count).max() ?? 6)
+
+    /// The repo directory's name; for a `<repo>/.claude/worktrees/<wt>`
+    /// worktree, the repo's. Cut to `maxLength` with an ellipsis. nil when
+    /// there is no usable name (callers fall back to the codename).
+    static func make(cwd: String) -> String? {
+        var parts = cwd.split(separator: "/").map(String.init)
+        if let i = parts.lastIndex(of: ".claude"), i > 0, i + 1 < parts.count, parts[i + 1] == "worktrees" {
+            parts = Array(parts[..<i])
+        }
+        guard let last = parts.last else { return nil }
+        let clean = String(last.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
+        guard !clean.isEmpty else { return nil }
+        return clean.count <= maxLength ? clean : String(clean.prefix(maxLength - 1)) + "…"
     }
 }
 

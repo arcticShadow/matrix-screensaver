@@ -26,8 +26,8 @@ final class DiagnosticsCore {
     let saverStart: Date
     /// Show the per-source fetch-time debug lines.
     let showDebug: Bool
-    /// Display names (codenames; salt from config or per-run random).
-    let namer: DisplayNamer
+    /// Codename salt holder (salt from config or per-run random); see `namer`.
+    private let baseNamer: DisplayNamer
     /// AGENTS panel height budget in lines; the renderer sets it from the
     /// screen height.
     var agentsMaxLines = 40
@@ -42,7 +42,7 @@ final class DiagnosticsCore {
         config = loaded.config
         configStatus = loaded.status
         saverStart = env.now()
-        namer = DisplayNamer(salt: loaded.config.codenameSalt)
+        baseNamer = DisplayNamer(salt: loaded.config.codenameSalt)
         self.showDebug = showDebug
         mode = polling
         if case .manual = polling {
@@ -82,6 +82,29 @@ final class DiagnosticsCore {
         }
     }
 
+    // MARK: Trusted network
+
+    /// THE trusted-network decision, from the latest Wi-Fi reading. Anything
+    /// that shows real names (repo names, calendar titles) must follow it.
+    func networkTrust() -> NetworkTrust { networkTrust(snapshot(), env.now()) }
+
+    /// Display names under the current trust decision.
+    var namer: DisplayNamer { namer(networkTrust()) }
+
+    private func namer(_ trust: NetworkTrust) -> DisplayNamer {
+        var n = baseNamer
+        n.trust = trust
+        return n
+    }
+
+    /// Fail closed: a failing read or a reading older than 2x its refresh
+    /// interval (poller stalled) no longer counts.
+    private func networkTrust(_ snap: DiagSnapshot, _ now: Date) -> NetworkTrust {
+        let sched = snap.schedules[SourceIDs.wifi]
+        let current = sched.map { $0.consecutiveFailures == 0 && !$0.isStale(now: now) } ?? false
+        return NetworkTrust.decide(trustedSSIDs: config.trustedSSIDs, wifi: snap.wifi?.value, current: current)
+    }
+
     // MARK: Panels
 
     /// Panels to draw this frame, in display order. Empty when the overlay is off.
@@ -109,7 +132,8 @@ final class DiagnosticsCore {
         let sec = section(snap.sessions, SourceIDs.sessions, snap, now)
         let failing = (snap.schedules[SourceIDs.sessions]?.consecutiveFailures ?? 0) > 0
         return AgentsPanel.build(AgentsInputs(now: now, scan: sec.value, signalLost: failing,
-                                              staleMarker: sec.staleMarker, namer: namer,
+                                              staleMarker: sec.staleMarker,
+                                              namer: namer(networkTrust(snap, now)),
                                               profileTags: config.profileTags,
                                               maxLines: agentsMaxLines))
     }

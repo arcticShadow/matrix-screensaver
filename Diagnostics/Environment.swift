@@ -21,6 +21,8 @@ struct DiagnosticsEnvironment {
     /// queue. Default to the live readers; tests and the harness inject fakes.
     var readVitals: () throws -> HostVitals = HostReaders.vitals
     var readPower: () throws -> PowerStatus = HostReaders.power
+    /// Current Wi-Fi name, nil = unreadable (see Network.swift). Never log it.
+    var readWiFi: () throws -> String? = WiFiReader.currentSSID
     /// Session-process liveness (proc_pidinfo + procStart). Tests inject fakes.
     var isProcessAlive: LivenessChecker = Liveness.check
 

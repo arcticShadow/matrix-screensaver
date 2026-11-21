@@ -26,6 +26,7 @@ struct DiagSnapshot: Equatable {
     var vitals: Sample<HostVitals>?
     var power: Sample<PowerStatus>?
     var sessions: Sample<SessionScan>?
+    var wifi: Sample<WiFiStatus>?
     /// Every registered source's schedule, by id (staleness, debug stats).
     var schedules: [SourceID: SourceSchedule] = [:]
 }
@@ -51,11 +52,12 @@ enum SourceIDs {
     static let vitals: SourceID = "VIT"
     static let power: SourceID = "PWR"
     static let sessions: SourceID = "SES"
+    static let wifi: SourceID = "NET"
 }
 
 enum PollSources {
     /// Display order of the debug lines (the registry order).
-    static let order: [SourceID] = [SourceIDs.vitals, SourceIDs.power, SourceIDs.sessions]
+    static let order: [SourceID] = [SourceIDs.vitals, SourceIDs.power, SourceIDs.sessions, SourceIDs.wifi]
 
     /// The saver's sources, in display order for the debug lines.
     static func standard(_ env: DiagnosticsEnvironment) -> [PollSource] {
@@ -65,6 +67,9 @@ enum PollSources {
             .make(SourceIDs.sessions, every: 2, read: { [home = env.homeDirectory, alive = env.isProcessAlive] in
                 try SessionReader.scan(home: home, isAlive: alive)
             }, into: \.sessions),
+            .make(SourceIDs.wifi, every: 30, read: { [read = env.readWiFi] in
+                WiFiStatus(ssid: try read())
+            }, into: \.wifi),
         ]
     }
 }

@@ -48,6 +48,8 @@ struct Scenario {
     var clockStep: TimeInterval = 1.0 / 30.0
     /// Fake `~/.claude*` session files written into the scratch home.
     var sessions: [HarnessSession] = []
+    /// What the fake Wi-Fi reader returns (nil = unreadable). Made-up names only.
+    var wifi: String? = nil
 }
 
 /// One fake session file (neutral names and paths only).
@@ -99,6 +101,13 @@ let scenarios = [
     Scenario(name: "overlay-desktop", power: .noBattery),
     Scenario(name: "agents", configJSON: #"{ "codenameSalt": "harness-demo" }"#, sessions: demoSessions),
     Scenario(name: "agents-signal-lost", sessions: [.init(pid: 1, cwd: "/x", status: "busy", ago: 1)]),
+    // Trusted network: real (fake) repo names. Unreadable Wi-Fi: codenames + NET UNVERIFIED.
+    Scenario(name: "agents-trusted",
+             configJSON: #"{ "codenameSalt": "harness-demo", "trustedSSIDs": ["TrustedNet"] }"#,
+             sessions: demoSessions, wifi: "TrustedNet"),
+    Scenario(name: "agents-unverified",
+             configJSON: #"{ "codenameSalt": "harness-demo", "trustedSSIDs": ["TrustedNet"] }"#,
+             sessions: demoSessions, wifi: nil),
 ]
 
 func makeWorld(_ s: Scenario, clock: Clock) -> DiagnosticsEnvironment {
@@ -126,7 +135,7 @@ func makeWorld(_ s: Scenario, clock: Clock) -> DiagnosticsEnvironment {
         FileManager.default.createFile(atPath: "\(dir)/\(f.pid).json", contents: body)
     }
     let dead = Set(s.sessions.filter { !$0.alive }.map(\.pid))
-    let thermal = s.thermal, power = s.power, failAfterFirst = s.vitalsFailAfterFirst
+    let thermal = s.thermal, power = s.power, failAfterFirst = s.vitalsFailAfterFirst, wifi = s.wifi
     var env = DiagnosticsEnvironment(now: { clock.now },
                                   homeDirectory: home,
                                   configPath: cfg,
@@ -141,6 +150,7 @@ func makeWorld(_ s: Scenario, clock: Clock) -> DiagnosticsEnvironment {
                                   },
                                   readPower: { power })
     env.isProcessAlive = { pid, _ in !dead.contains(pid) }
+    env.readWiFi = { wifi }
     return env
 }
 

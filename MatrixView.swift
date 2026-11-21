@@ -344,8 +344,18 @@ final class MatrixView: ScreenSaverView {
         guard drawTimes.count >= 300 else { return }
         let sorted = drawTimes.sorted()
         let ms = { (q: Double) in Double(sorted[min(sorted.count - 1, Int(Double(sorted.count) * q))]) / 1e6 }
-        Self.log.notice("draw ms p50=\(ms(0.5), privacy: .public) p99=\(ms(0.99), privacy: .public) max=\(ms(1.0), privacy: .public) n=\(sorted.count, privacy: .public) polling=\(self.isPolling, privacy: .public)")
+        Self.log.notice("draw ms p50=\(ms(0.5), privacy: .public) p99=\(ms(0.99), privacy: .public) max=\(ms(1.0), privacy: .public) n=\(sorted.count, privacy: .public) polling=\(self.isPolling, privacy: .public) net=\(self.netTrustLabel, privacy: .public)")
         drawTimes.removeAll(keepingCapacity: true)
+    }
+
+    /// The trust decision only (trusted/untrusted/unverified), never the Wi-Fi name.
+    private var netTrustLabel: String {
+        guard let core = diagnostics, isPolling else { return "-" }
+        switch core.networkTrust() {
+        case .trusted: return "trusted"
+        case .untrusted: return "untrusted"
+        case .unverified: return "unverified"
+        }
     }
     #endif
 
