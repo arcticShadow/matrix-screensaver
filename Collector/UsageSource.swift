@@ -33,20 +33,6 @@ enum KeychainNaming {
     }
 }
 
-enum AccountDiscovery {
-    /// Basenames of `~/.claude*` entries that are directories, `.claude` first.
-    static func configDirs(home: String) -> [String] {
-        let fm = FileManager.default
-        let names = (try? fm.contentsOfDirectory(atPath: home)) ?? []
-        return names.filter { name in
-            guard name == ".claude" || name.hasPrefix(".claude-") else { return false }
-            var isDir: ObjCBool = false
-            return fm.fileExists(atPath: (home as NSString).appendingPathComponent(name), isDirectory: &isDir)
-                && isDir.boolValue
-        }.sorted { a, b in a == ".claude" ? true : b == ".claude" ? false : a < b }
-    }
-}
-
 struct UsageSource: CollectorSource {
     static let endpoint = "https://api.anthropic.com/api/oauth/usage"
     let id: SourceID = CollectorSourceIDs.usage
@@ -63,7 +49,7 @@ struct UsageSource: CollectorSource {
         var accounts: [AccountUsage] = []
         var successes = 0, errors = 0
         TokenRefresh.prune(&state, now: ctx.now())
-        for dir in AccountDiscovery.configDirs(home: ctx.home) {
+        for dir in (try? ConfigDirs.discover(home: ctx.home)) ?? [] {
             let before = previous[dir]
             var a = before ?? AccountUsage(dir: dir, token: .none)
             var outcome = fetchAccount(&a, ctx)

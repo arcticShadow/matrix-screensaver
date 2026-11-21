@@ -20,7 +20,8 @@
 | `Diagnostics/Poller.swift` | `DiagSnapshot`, the source registry (`PollSources.standard`), `PollEngine` (single-threaded tick), `PollerHub` (the one shared background poller, lease-counted). |
 | `Diagnostics/HostReaders.swift` | `HostVitals` / `PowerStatus` and the live readers (getloadavg, memory-pressure sysctl, thermal state, IOKit power sources). |
 | `Diagnostics/Flavour.swift` | Clock-driven atmosphere lines (scrolling hex, status readout). |
-| `Diagnostics/Sessions.swift` | Session discovery (`~/.claude*` dirs with `sessions/`, canonical `<pid>.json` only), `SessionRecord`, `WaitCategory` (the only part of `waitingFor` kept), `Liveness` (`proc_pidinfo` + UTC `procStart`). |
+| `Diagnostics/ConfigDirs.swift` | `ConfigDirs.discover`: THE config-dir rule (every `~/.claude*` directory; `.claude.json*` files never), used by both the session scan and the collector's usage accounts. |
+| `Diagnostics/Sessions.swift` | Session discovery (config dirs with `sessions/`, canonical `<pid>.json` only), `SessionRecord`, `WaitCategory` (the only part of `waitingFor` kept), `Liveness` (`proc_pidinfo` + UTC `procStart`). |
 | `Diagnostics/BackgroundAgents.swift` | Background-agent counts per session (`BackgroundAgentScanner`, run inside the sessions scan): fresh unfinished subagent metas, running jobs, live daemon-roster workers; `ProjectDirName` (Claude Code's cwd → project-dir sanitiser); `BackgroundCfg` tunables. |
 | `Diagnostics/AgentsPanel.swift` | `AgentClassifier` (ATTENTION/ACTIVE/AWAITING/DORMANT/GHOST, `AgentsCfg` tunables) and the pure AGENTS panel builder (totals, sorted roster, dormant fold, `+N more`). |
 | `Diagnostics/Alerts.swift` | Attention alerts: `AlertsCfg` (30 s wait threshold, 60 s period, 4 s duration), `AttentionAlerts.candidates` (live ATTENTION sessions waiting ≥ threshold, oldest first) and `BannerScheduler` (when the takeover banner shows and which session it names). |

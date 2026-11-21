@@ -205,6 +205,29 @@ func collectorTests() {
         expectEqual(r.headers["User-Agent"], "claude-cli/9.9.9 (external, cli)")
     }
 
+    test("config dirs: saver sessions scan and collector usage discover the same ~/.claude* directories") {
+        let w = FakeCollector("col-discovery")
+        // Any `.claude*` directory counts (no dash required); `.claude.json*` files never do.
+        w.addAccount(".claude", token: "tok-w")
+        w.addAccount(".claude-alpha", token: "tok-a")
+        w.addAccount(".claudework", token: "tok-x")
+        writeFile("\(w.home)/.claude.json", "{}")
+        writeFile("\(w.home)/.claude.json.backup", "{}")
+        writeFile("\(w.home)/.clau/sessions/1.json", "{}")
+        for t in ["tok-w", "tok-a", "tok-x"] { w.responses[t] = (200, usageBody(five: 1, seven: 1)) }
+        for (i, dir) in [".claude", ".claude-alpha", ".claudework"].enumerated() {
+            writeFile("\(w.home)/\(dir)/sessions/\(100 + i).json",
+                      #"{"pid":\#(100 + i),"sessionId":"s\#(i)","cwd":"/home/demo/r","status":"busy"}"#)
+        }
+        let expected = [".claude", ".claude-alpha", ".claudework"]
+        expectEqual(try ConfigDirs.discover(home: w.home), expected)
+        w.run()
+        expectEqual(w.state()?.usage?.accounts.map(\.dir), expected)
+        let scan = try SessionReader.scan(home: w.home, isAlive: { _, _ in true }, now: w.now)
+        expectEqual(scan.configDirs, expected)
+        expectEqual(scan.sessions.map(\.configDir), expected)
+    }
+
     test("a dir without a keychain item is recorded as token none, with no request") {
         let w = FakeCollector("col-none")
         w.addAccount(".claude", token: "tok-w")

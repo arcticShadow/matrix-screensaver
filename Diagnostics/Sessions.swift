@@ -1,8 +1,9 @@
 //
 //  Sessions.swift
-//  Claude Code session discovery: every `~/.claude*` DIRECTORY under the real
-//  home that has a `sessions/` dir; in it, only canonical `<pid>.json` files
-//  (the `<pid>.<hash>.key` files, dotfiles and anything else are skipped).
+//  Claude Code session discovery: every config dir (`ConfigDirs.discover`:
+//  `~/.claude*` directories under the real home) that has a `sessions/` dir;
+//  in it, only canonical `<pid>.json` files (the `<pid>.<hash>.key` files,
+//  dotfiles and anything else are skipped).
 //
 //  Runs on the poller's background queue (sessions source, every 2 s). The
 //  liveness check (proc_pidinfo) happens here too, so the render thread never
@@ -110,18 +111,17 @@ enum SessionReader {
     static func scan(home: String, isAlive: LivenessChecker, now: Date,
                      background: BackgroundAgentScanner = BackgroundAgentScanner()) throws -> SessionScan {
         let fm = FileManager.default
-        let entries: [String]
-        do { entries = try fm.contentsOfDirectory(atPath: home) } catch {
+        let dirs: [String]
+        do { dirs = try ConfigDirs.discover(home: home) } catch {
             throw SignalLost(description: "home not listable")
         }
         var scan = SessionScan()
         var candidates = 0
         var seenKeys = Set<String>()
-        for dir in entries.sorted() where dir == ".claude" || dir.hasPrefix(".claude") {
+        for dir in dirs {
             var isDir: ObjCBool = false
             let sessions = "\(home)/\(dir)/sessions"
-            guard fm.fileExists(atPath: "\(home)/\(dir)", isDirectory: &isDir), isDir.boolValue,
-                  fm.fileExists(atPath: sessions, isDirectory: &isDir), isDir.boolValue else { continue }
+            guard fm.fileExists(atPath: sessions, isDirectory: &isDir), isDir.boolValue else { continue }
             scan.configDirs.append(dir)
             let files: [String]
             do { files = try fm.contentsOfDirectory(atPath: sessions) } catch {
