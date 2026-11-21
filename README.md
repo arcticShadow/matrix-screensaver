@@ -61,7 +61,11 @@ prompt (`APPROVE BASH`, `INPUT NEEDED`) is ever shown, never the command. If
 the session files can't be parsed it says `AGENT.LINK SIGNAL LOST` rather than
 showing zero. To spare OLED/XDR screens from burn-in, the two panels rotate
 clockwise together one corner every 10 minutes, always diagonally opposite and
-clear of the logo (the roster shortens if the logo is in its way).
+clear of the logo (the roster shortens if the logo is in its way). While any session is blocked on you, the AGENTS border and its ATTENTION row
+pulse red. Once a session has waited 30 s, a centre takeover banner
+(`⚠ OPERATOR REQUIRED — IRON-LATTICE — APPROVE BASH`) shows for ~4 s every
+60 s, cycling oldest-first through the waiting sessions, while the rain glitches
+and washes red behind it.
 
 With the optional collector installed (below), SYS also shows Claude usage per
 account and a CALENDAR line: the next upcoming timed event

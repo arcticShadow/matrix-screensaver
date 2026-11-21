@@ -34,6 +34,9 @@ final class DiagnosticsCore {
     /// Burn-in rotation of the panel corners (the saver sets its `Cfg` interval).
     var rotation = PanelRotation()
 
+    /// Takeover-banner clock (see Alerts.swift).
+    private var bannerScheduler = BannerScheduler()
+
     private let mode: PollingMode
     private var manualEngine: PollEngine?
     private var lease: PollerLease?
@@ -140,15 +143,30 @@ final class DiagnosticsCore {
         return PanelLayout.place(panels(), now: now, rotation: rotation)
     }
 
+    /// The centre takeover banner to show this frame, if any. Stateful (it
+    /// advances the banner cycle): call once per frame. Nil when the overlay is off.
+    func banner() -> AlertBanner? {
+        guard overlayEnabled else { return nil }
+        let now = env.now()
+        let candidates = AttentionAlerts.candidates(agentsInputs(snapshot(), now))
+        return bannerScheduler.update(now: now, candidates: candidates)
+    }
+
     private func agentsPanel(_ snap: DiagSnapshot, _ now: Date) -> Panel {
+        AgentsPanel.build(agentsInputs(snap, now))
+    }
+
+    /// The one place the AGENTS inputs are assembled, shared by the panel and
+    /// the banner so both use the same naming and exclusions.
+    private func agentsInputs(_ snap: DiagSnapshot, _ now: Date) -> AgentsInputs {
         let sec = section(snap.sessions, SourceIDs.sessions, snap, now)
         let failing = (snap.schedules[SourceIDs.sessions]?.consecutiveFailures ?? 0) > 0
-        return AgentsPanel.build(AgentsInputs(now: now, scan: sec.value, signalLost: failing,
-                                              staleMarker: sec.staleMarker,
-                                              namer: namer(networkTrust(snap, now)),
-                                              profileTags: config.profileTags,
-                                              excludedSessionIDs: snap.collector?.value.state?.hiddenSessionIDs ?? [],
-                                              maxLines: agentsMaxLines))
+        return AgentsInputs(now: now, scan: sec.value, signalLost: failing,
+                            staleMarker: sec.staleMarker,
+                            namer: namer(networkTrust(snap, now)),
+                            profileTags: config.profileTags,
+                            excludedSessionIDs: snap.collector?.value.state?.hiddenSessionIDs ?? [],
+                            maxLines: agentsMaxLines)
     }
 
     private func section<T>(_ sample: Sample<T>?, _ id: SourceID,
