@@ -21,13 +21,19 @@
 | `Diagnostics/HostReaders.swift` | `HostVitals` / `PowerStatus` and the live readers (getloadavg, memory-pressure sysctl, thermal state, IOKit power sources). |
 | `Diagnostics/Flavour.swift` | Clock-driven atmosphere lines (scrolling hex, status readout). |
 | `Diagnostics/Sessions.swift` | Session discovery (`~/.claude*` dirs with `sessions/`, canonical `<pid>.json` only), `SessionRecord`, `WaitCategory` (the only part of `waitingFor` kept), `Liveness` (`proc_pidinfo` + UTC `procStart`). |
+| `Diagnostics/BackgroundAgents.swift` | Background-agent counts per session (`BackgroundAgentScanner`, run inside the sessions scan): fresh unfinished subagent metas, running jobs, live daemon-roster workers; `ProjectDirName` (Claude Code's cwd → project-dir sanitiser); `BackgroundCfg` tunables. |
 | `Diagnostics/AgentsPanel.swift` | `AgentClassifier` (ATTENTION/ACTIVE/AWAITING/DORMANT/GHOST, `AgentsCfg` tunables) and the pure AGENTS panel builder (totals, sorted roster, dormant fold, `+N more`). |
 | `Diagnostics/Naming.swift` | `DisplayNamer` (the one place a session's on-screen name is decided: `RepoName` when trusted, else salted `Codename`), `ProfileTags`. |
 | `Diagnostics/Network.swift` | Trusted-network rule: `NetworkTrust.decide` (trusted / untrusted / unverified), `WiFiStatus` (never prints the name), live `WiFiReader.currentSSID` (SCDynamicStore AirPort `CachedScanRecord`). |
-| `Diagnostics/Layout.swift` | `PanelLayout.place`: which corner and width each panel gets (SYS top-left, AGENTS bottom-right). |
+| `Diagnostics/Layout.swift` | `PanelLayout.place`: which corner and width each panel gets. `PanelRotation`: SYS and AGENTS diagonally opposite, stepping clockwise together once per interval (step 0 = SYS top-left, AGENTS bottom-right). |
+| `Diagnostics/CollectorState.swift` | The collector state-file schema (`CollectorState`, `UsageSection`, `AccountUsage`) + `CollectorStateStore` (ISO-8601 ms dates). Shared by saver and collector. |
+| `Diagnostics/UsageBlock.swift` | Saver side of the collector: `CollectorReader` (poll source `COL`, 5 s) and the SYS `CLAUDE.USAGE` lines (meters, STALE, XTRA, COLLECTOR OFFLINE). |
+| `Collector/` | The unsandboxed collector executable (`mise run collector:build`): `Collector.swift` run loop + `CollectorSource` protocol + `AtomicFile`, `UsageSource.swift` (keychain naming, discovery, usage endpoint), `LiveDeps.swift` (`security`, URLSession allowlist, binary resolution), `CollectorLog.swift`, `main.swift`. |
 | `Tests/` | Plain `swiftc` test executable (`main.swift` lists suites, `TestKit.swift` assertion helper, one `*Tests.swift` per seam). |
 | `Harness/main.swift` | Offscreen render harness: real MatrixView + fake environment -> PNGs. |
-| `mise.toml` | `build`, `test`, `snapshot`, `install`, `package`, `preview`, `clean` tasks. **Authoritative build commands.** |
+| `mise.toml` | `build`, `test`, `snapshot`, `install`, `package`, `preview`, `clean`, `collector:build` tasks, plus a `collector:uninstall` that delegates to `mise.collector.toml`. **Authoritative build commands.** Never put a `bootstrap` task here (it would make a plain `mise bootstrap` install the collector). |
+| `mise.collector.toml` | Opt-in collector install (`mise -E collector bootstrap`): the LaunchAgent `dev.mise.matrix-diag-collector`, the idempotent `bootstrap` task (install binary to `~/.local/libexec/matrix-diag/`, log dir, `--init-config`, kickstart) and the real `collector:uninstall [--purge]`. Self-contained so a release zip can ship it without `mise.toml`. |
+| `Collector/ConfigInit.swift` | `ConfigInitializer.createIfMissing` behind `matrix-diag-collector --init-config`: config with defaults + random salt, 0600, O_EXCL, never overwrites. |
 | `README.md` | Palette reference, build steps, design notes. |
 | `AGENTS.md` | This file. |
 
@@ -38,7 +44,11 @@ mise run test       # swiftc Diagnostics/*.swift Tests/*.swift -> build/tests/Di
 mise run build      # swiftc MatrixView.swift PanelRenderer.swift Diagnostics/*.swift -> Mach-O bundle, ad-hoc signed
 mise run snapshot   # offscreen render to build/snapshot/*.png (+ overlay-debug/-stale/-desktop) and a shared-poller/teardown check; TIMING=1 adds a frame-time check
 mise run install    # build + copy to ~/Library/Screen Savers + kill the hosts so they reload
+mise -E collector bootstrap   # opt-in: install/update the collector LaunchAgent (mise.collector.toml)
+mise run collector:uninstall  # remove agent, plist, binary, logs, state; --purge also removes the config
 ```
+
+mise loads LaunchAgents (bootstrap step 5) before the `bootstrap` task (step 9), so on a first install the agent's first run finds no binary; the task kickstarts it at the end. The task runs on every bootstrap and must stay idempotent. `--init-config` is passed `--config "$HOME/..."` explicitly because the binary otherwise resolves home with `getpwuid`, while the uninstall uses `$HOME`.
 
 `mise.toml` holds the exact `swiftc` invocations. The `build/` directory and compiled `.saver` are gitignored — always build from source; put every build/test artifact under `build/`.
 
@@ -46,7 +56,7 @@ mise run install    # build + copy to ~/Library/Screen Savers + kill the hosts s
 
 ## Source layout rules
 
-- The single-file rule is relaxed: saver = `MatrixView.swift` + `PanelRenderer.swift` (AppKit) + `Diagnostics/*.swift` (core), compiled as one module. A future collector executable compiles `Diagnostics/*.swift` + its own `main.swift`, so the core must stay UI-free and free of global side effects.
+- The single-file rule is relaxed: saver = `MatrixView.swift` + `PanelRenderer.swift` (AppKit) + `Diagnostics/*.swift` (core), compiled as one module. The collector executable compiles `Diagnostics/*.swift` + `Collector/*.swift`, so the core must stay UI-free and free of global side effects.
 - Content decisions (what a line says, its severity) belong in the core and are tested there. The renderer only maps `Severity`/`LineStyle` to colours and geometry.
 - Anything from the outside world (time, files, home, Wi-Fi, process liveness, …) is a member of `DiagnosticsEnvironment`, never called directly from a builder.
 - Tests assert on the panel model at the highest seam (`DiagnosticsCore` with a fake home tree via `FakeWorld` in `Tests/CoreTests.swift`, or a panel builder), never on drawing or private helpers. Expected values are literals.
@@ -76,7 +86,10 @@ This explicit buffer is necessary because `ScreenSaverView.draw()` does not guar
 - Scheduling (`SourceSchedule`): effective interval = `max(base, 20 × last fetch)`; failures back off `base × 2^n` capped at `10 × base`; a section shows a dim `·12s` marker once its data is older than `2 × max(base, 20 × last fetch)` (backoff deliberately excluded, so failing sources show staleness). Bases: sessions 2 s, vitals 5 s, Wi-Fi 30 s, power 60 s.
 - Adding a source: see the header comment in `Diagnostics/Poller.swift` (reader in `DiagnosticsEnvironment`, slot in `DiagSnapshot`, one `.make(...)` line in `PollSources.standard` + `order`, its panel lines).
 - Real home comes from `getpwuid(getuid())`; the sandboxed host's `NSHomeDirectory()` is its container. The sandboxed host *can* read `~/.config/matrix-diag/config.json` (verified).
+- AGENTS: session files are read on the poller queue (liveness via `proc_pidinfo` there too); a scan that can't list a sessions dir, or finds session files of which none parse, or a failing sessions source shows `AGENT.LINK SIGNAL LOST`, never zero. Private free text (`name`, `waitingFor` command, cwd, config-dir names) never reaches a `Panel`: names go through `DisplayNamer`, dirs through `ProfileTags`. The renderer passes `core.layout(agentsLineCapacity:)` a per-corner line budget: the panel may grow from its corner only until it comes within `logoClearance` of a logo-mask cell in the columns it spans (cached per corner, rebuilt with the mask in `setup()`).
+- Burn-in rotation: `PanelRotation.step = floor(now / interval) mod 4`, anchored to the wall clock rather than the saver start, so short activations don't keep parking the panels in the same corners. `MatrixView.panelRotationInterval` (defaults to `Cfg.panelRotationInterval`) is the harness hook; `mise run snapshot` writes `rotation-<size>-<step>-sys-<corner>.png` at 1728x1117 and 1440x900 with a 5 s interval. At 1440x900 the logo leaves the AGENTS roster only a few lines in every corner.
 - AGENTS: session files are read on the poller queue (liveness via `proc_pidinfo` there too); a scan that can't list a sessions dir, or finds session files of which none parse, or a failing sessions source shows `AGENT.LINK SIGNAL LOST`, never zero. Private free text (`name`, `waitingFor` command, cwd, config-dir names) never reaches a `Panel`: names go through `DisplayNamer`, dirs through `ProfileTags`. The renderer sets `agentsMaxLines` from the screen height.
+- BACKGROUND: per live session, subagents are read from `<its own config dir>/projects/<sanitised cwd>/<sessionId>/subagents/`; only when that path doesn't hold the session does a fallback list every project dir for the session id, and the answer is cached per session in the poll source's `BackgroundAgentScanner` (so it is not re-run every 2 s). Running jobs (`working`/`starting`) and live roster workers are deduplicated by session id and attributed within the same config dir; unmatched ones count only in the total. Missing or malformed background files are zero, never SIGNAL LOST. Rows show `+N BG` (capped at 99).
 - Trusted network: `DiagnosticsCore.networkTrust()` is THE decision for anything showing real names (repo names now, calendar titles later); `core.namer` carries it. Trusted only when the Wi-Fi name is readable, current (last read succeeded, not older than 2× its interval) and in `trustedSSIDs`; unreadable/failing/stale/not-yet-read → `.unverified` (codenames + `NET UNVERIFIED`); empty `trustedSSIDs` → always `.untrusted`, no tag. Never log, print or commit a Wi-Fi name; tests use made-up names.
 - Keep the dismissal guarantees: `autoreleasepool` in `draw`, cached attrs (renderer caches its own), terminal `didstop`, `teardown()` releases buffers, the renderer and the poller lease.
 - Real-host check without screen capture (the session is locked while the saver runs): `SM_SWIFT_FLAGS="-D SM_FRAME_DUMP" mise run install` makes the saver write `SolarizedMatrix-frame-<pid>-main-150.png` into its container's `Data/tmp` (`~/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/Data/tmp/`). Reinstall without the flag afterwards. That build also logs `draw ms p50=… p99=… max=… polling=… net=<trusted|untrusted|unverified>` every 300 frames and `poller decide/teardown leased=… running=… leases=… starts=…`.
@@ -90,8 +103,12 @@ This explicit buffer is necessary because `ScreenSaverView.draw()` does not guar
 | `fadeAlpha` | `0.018` | Trail length — lower = longer, glowier trails |
 | `overlayFontSize` | `15` | Overlay text size (points) |
 | `overlayMargin` | `48` | Overlay inset from the screen edge (points) |
-| `PanelLayout.sysColumns` / `agentsColumns` | `34` / `46` | Panel widths in monospace cells (`Diagnostics/Layout.swift`) |
+| `panelRotationInterval` | `600` | Seconds before both panels step one corner clockwise (burn-in protection) |
+| `logoClearance` | `16` | Minimum gap between the AGENTS panel and the logo's glyph cells (points) |
+| `PanelLayout.sysColumns` / `agentsColumns` | `34` / `52` | Panel widths in monospace cells (`Diagnostics/Layout.swift`) |
 | `AgentsCfg.awaitingWindow` | `15 min` | Idle sessions younger than this are AWAITING, older ones DORMANT (`Diagnostics/AgentsPanel.swift`) |
+| `BackgroundCfg.subagentFreshness` | `5 min` | An unfinished subagent counts only if its transcript changed this recently (crash guard) (`Diagnostics/BackgroundAgents.swift`) |
+| `BackgroundCfg.fallbackRetry` | `60 s` | How long a failed cwd-fallback lookup for a session is cached before the project dirs are listed again |
 | `overlayDebug` | `false` | Show per-source fetch time / effective interval lines (`DBG.VIT 1.2ms @5s`, `F2` = failing). On in `SM_FRAME_DUMP` builds. |
 
 ## Glyph sets

@@ -26,6 +26,13 @@ struct DiagnosticsEnvironment {
     /// Session-process liveness (proc_pidinfo + procStart). Tests inject fakes.
     var isProcessAlive: LivenessChecker = Liveness.check
 
+    /// The collector state file reader: always the file under `homeDirectory`
+    /// (tests and the harness write a state file into their fake home).
+    var readCollector: () throws -> CollectorReading {
+        let home = homeDirectory
+        return { try CollectorReader.read(home: home) }
+    }
+
     static func live() -> DiagnosticsEnvironment {
         let home = realHomeDirectory()
         return DiagnosticsEnvironment(now: Date.init,

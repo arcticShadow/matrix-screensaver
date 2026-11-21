@@ -5,7 +5,8 @@
 //
 //  Extension points (see the #4 notes): `ClassifiedSession.waitingSince` for
 //  the banner/pulse ticket, `AgentsInputs.excludedSessionIDs` for collector
-//  refresh sessions, the `bg` slot left in the totals for background agents.
+//  refresh sessions. BACKGROUND totals come from `SessionRecord.background`
+//  (see BackgroundAgents.swift).
 //
 
 import Foundation
@@ -102,6 +103,7 @@ enum AgentsPanel {
         let active = count { $0 == .active }
         let awaiting = count { $0 == .awaiting }
         let dormant = count { $0 == .dormant }
+        let background = live.reduce(scan.unattributedBackground) { $0 + $1.record.background }
 
         var lines: [PanelLine] = [.field("AGENT.LINK", "ONLINE", .ok)]
         // Wi-Fi name unreadable: names stay codenames, and say why.
@@ -112,6 +114,7 @@ enum AgentsPanel {
             .field("ATTENTION", "\(attention)", attention > 0 ? .alert : .dim),
             .field("AWAITING", "\(awaiting)", awaiting > 0 ? .warn : .dim),
             .field("DORMANT", "\(dormant)", .dim),
+            .field("BACKGROUND", "\(background)", background > 0 ? .ok : .dim),
             .section("ROSTER", marker: inp.staleMarker),
         ]
 
@@ -151,7 +154,8 @@ enum AgentsPanel {
         let label = [inp.namer.name(for: r),
                      ProfileTags.tag(configDir: r.configDir, overrides: inp.profileTags),
                      r.entrypoint == "claude-desktop" ? "DSK" : "CLI"].joined(separator: " ")
-        let age = r.statusSince.map { formatAge(inp.now.timeIntervalSince($0)) } ?? "?"
+        let age = (r.statusSince.map { formatAge(inp.now.timeIntervalSince($0)) } ?? "?")
+            + (r.background > 0 ? " +\(min(r.background, maxBackgroundShown)) BG" : "")
         switch s.state {
         case let .attention(cat): return .field(label, "\(cat.label) \(age)", .alert)
         case .active:             return .field(label, "ACTIVE \(age)", .ok)
@@ -159,6 +163,9 @@ enum AgentsPanel {
         case .dormant, .ghost:    return .field(label, "idle \(age)", .dim)
         }
     }
+
+    /// Per-row `+N BG` suffix cap (keeps the row width bounded).
+    static let maxBackgroundShown = 99
 
     /// 45s, 12m, 3h, 2d.
     static func formatAge(_ t: TimeInterval) -> String {
