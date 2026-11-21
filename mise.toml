@@ -2,7 +2,7 @@
 # Docs: https://mise.jdx.dev/tasks/
 #
 #   mise run build      # compile + ad-hoc sign        -> build/SolarizedMatrix.saver
-#   mise run package    # build, then zip distributable -> SolarizedMatrix.saver.zip
+#   mise run package    # build saver + collector, zip  -> SolarizedMatrix.saver.zip
 #   mise run install    # build, then install to ~/Library/Screen Savers and reload
 #   mise run clean      # remove the built bundle and the zip
 #   mise run test       # compile Diagnostics/ + Tests/ into build/tests and run (non-zero on failure)
@@ -129,14 +129,31 @@ swiftc MatrixView.swift PanelRenderer.swift Diagnostics/*.swift Harness/main.swi
 '''
 
 [tasks.package]
-description = "Build, then zip a distributable SolarizedMatrix.saver.zip (bundle + INSTALL.txt)"
-depends = ["build"]
+description = "Build the saver + collector, then zip SolarizedMatrix.saver.zip (saver, collector, mise.collector.toml, INSTALL.txt)"
+depends = ["build", "collector:build"]
 run = '''
 set -eu
-rm -f SolarizedMatrix.saver.zip
-# Name the bundle explicitly so the screenshots in build/ are never zipped in.
-zip -r -X SolarizedMatrix.saver.zip INSTALL.txt build/SolarizedMatrix.saver >/dev/null
-echo "Packaged SolarizedMatrix.saver.zip:"
+# Everything sits in ONE top-level folder, so Archive Utility unpacks a single
+# `SolarizedMatrix/` (not a folder named after the zip, which would end in .saver).
+# The prebuilt collector MUST be named `matrix-diag-collector` and sit next to
+# mise.collector.toml: its bootstrap task installs that file instead of building.
+stage_root="build/package"
+stage="$stage_root/SolarizedMatrix"
+rm -rf "$stage_root" SolarizedMatrix.saver.zip
+mkdir -p "$stage"
+cp -R build/SolarizedMatrix.saver "$stage/"
+cp build/collector/matrix-diag-collector "$stage/"
+cp mise.collector.toml INSTALL.txt "$stage/"
+
+# Refuse to ship something that will not run.
+file "$stage/matrix-diag-collector" | grep -q "Mach-O 64-bit executable" \
+  || { echo "ERROR: matrix-diag-collector is not a Mach-O executable"; exit 1; }
+codesign -v "$stage/SolarizedMatrix.saver"
+codesign -v "$stage/matrix-diag-collector"
+
+# Name the staged folder explicitly so screenshots etc. in build/ are never zipped in.
+(cd "$stage_root" && zip -r -X -y ../../SolarizedMatrix.saver.zip SolarizedMatrix >/dev/null)
+echo "Packaged SolarizedMatrix.saver.zip (v$SM_VERSION):"
 unzip -l SolarizedMatrix.saver.zip
 '''
 
@@ -167,7 +184,7 @@ echo "Wrote assets/matrix-preview.svg ($(wc -c < assets/matrix-preview.svg) byte
 description = "Remove the built bundle and the packaged zip"
 run = '''
 set -eu
-rm -rf build/SolarizedMatrix.saver
+rm -rf build/SolarizedMatrix.saver build/package
 rm -f SolarizedMatrix.saver.zip
-echo "Cleaned build/SolarizedMatrix.saver and SolarizedMatrix.saver.zip"
+echo "Cleaned build/SolarizedMatrix.saver, build/package and SolarizedMatrix.saver.zip"
 '''

@@ -36,7 +36,8 @@
 | `mise.toml` | `build`, `test`, `snapshot`, `install`, `package`, `preview`, `clean`, `collector:build` tasks, plus a `collector:uninstall` that delegates to `mise.collector.toml`. **Authoritative build commands.** Never put a `bootstrap` task here (it would make a plain `mise bootstrap` install the collector). |
 | `mise.collector.toml` | Opt-in collector install (`mise -E collector bootstrap`): the LaunchAgent `dev.mise.matrix-diag-collector`, the idempotent `bootstrap` task (install binary to `~/.local/libexec/matrix-diag/`, log dir, `--init-config`, kickstart) and the real `collector:uninstall [--purge]`. Self-contained so a release zip can ship it without `mise.toml`. |
 | `Collector/ConfigInit.swift` | `ConfigInitializer.createIfMissing` behind `matrix-diag-collector --init-config`: config with defaults + random salt, 0600, O_EXCL, never overwrites. |
-| `README.md` | Palette reference, build steps, design notes. |
+| `INSTALL.txt` | Install notes shipped **inside the release zip** (quarantine fix for both binaries, saver, collector with mise, uninstall). Keep in step with README's *Installing a release*. |
+| `README.md` | Overlay, config keys, what the saver/collector read, release install (mise + manual `launchctl`), build steps, palette. |
 | `AGENTS.md` | This file. |
 
 ## Build, test, install (no Xcode required)
@@ -46,11 +47,14 @@ mise run test       # swiftc Diagnostics/*.swift Tests/*.swift -> build/tests/Di
 mise run build      # swiftc MatrixView.swift PanelRenderer.swift Diagnostics/*.swift -> Mach-O bundle, ad-hoc signed
 mise run snapshot   # offscreen render to build/snapshot/*.png (+ overlay-debug/-stale/-desktop) and a shared-poller/teardown check; TIMING=1 adds a frame-time check
 mise run install    # build + copy to ~/Library/Screen Savers + kill the hosts so they reload
+mise run package    # build + collector:build, zip one SolarizedMatrix/ folder -> SolarizedMatrix.saver.zip
 mise -E collector bootstrap   # opt-in: install/update the collector LaunchAgent (mise.collector.toml)
 mise run collector:uninstall  # remove agent, plist, binary, logs, state; --purge also removes the config
 ```
 
 mise loads LaunchAgents (bootstrap step 5) before the `bootstrap` task (step 9), so on a first install the agent's first run finds no binary; the task kickstarts it at the end. The task runs on every bootstrap and must stay idempotent. `--init-config` is passed `--config "$HOME/..."` explicitly because the binary otherwise resolves home with `getpwuid`, while the uninstall uses `$HOME`.
+
+Release zip (`mise run package`): a single top-level `SolarizedMatrix/` folder (so Archive Utility never makes a folder ending in `.saver`) holding `SolarizedMatrix.saver`, the prebuilt collector, `mise.collector.toml` and `INSTALL.txt`. The collector must be named exactly `matrix-diag-collector` and sit next to `mise.collector.toml`: the bootstrap task installs `./matrix-diag-collector` when present instead of building (there is no `Collector/` in a release). The task fails unless both binaries are signed Mach-O. `mise.collector.toml` must stay self-contained (no dependency on `mise.toml`), and users must `mise trust` it once in the unpacked folder. No standalone install script: the LaunchAgent is declared only in `mise.collector.toml` (README documents the manual `launchctl` equivalent; keep the two in step). Cutting/publishing a release is the `release` skill's job.
 
 `mise.toml` holds the exact `swiftc` invocations. The `build/` directory and compiled `.saver` are gitignored — always build from source; put every build/test artifact under `build/`.
 

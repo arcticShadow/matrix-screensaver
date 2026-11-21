@@ -33,6 +33,7 @@ accent colour-per-column.
 | `build/SolarizedMatrix.saver/` | Bundle skeleton (`Info.plist` + `MacOS/`). Rebuild the binary from source. |
 | `assets/matrix-preview.svg` | The animated preview shown above. Generated, not hand-edited. |
 | `tools/gen_preview.py` | Generator for the preview SVG (`mise run preview`); mirrors the look from `MatrixView.swift`. |
+| `INSTALL.txt` | Short install notes shipped inside the release zip. |
 | `README.md` | This file — palette reference + build/install steps. |
 
 Tunables live in the `Cfg` struct at the top of `MatrixView.swift` — glyph cell
@@ -80,22 +81,75 @@ name can't be read at all (Wi-Fi off, wired, macOS redaction, any error) the
 panel also shows `NET UNVERIFIED`. With no `trustedSSIDs` it always uses
 codenames.
 
-To turn it off without rebuilding, create `~/.config/matrix-diag/config.json`:
+### Config file
 
-```json
-{ "overlay": false }
-```
+`~/.config/matrix-diag/config.json` is read by the saver (at each activation) and
+the collector. It is optional: missing or malformed means defaults, and each key
+is checked on its own, so one bad value keeps only that key's default. It is
+personal and never committed. The collector's install creates it (only if
+missing) with a random salt; without the collector, create it by hand if you want
+anything other than the defaults.
 
-The file is optional (missing or malformed → defaults) and is read at each
-activation. It is personal and never committed. Other keys:
+| Key | Type | Default | Meaning |
+|-----|------|---------|---------|
+| `overlay` | bool | `true` | `false` turns the overlay off (plain rain) without rebuilding. |
+| `trustedSSIDs` | array of strings | `[]` | Wi-Fi names on which real repo names and event titles are shown. Empty = codenames everywhere. |
+| `codenameSalt` | string | random per activation | Keeps codenames stable. Without it codenames change every time the saver starts. Keep it secret: anyone with it can confirm a guessed repo. |
+| `profileTags` | object | `{}` | Config-dir basename → tag (up to 3 letters/digits). Unlisted dirs: `.claude` → `WRK`, `.claude-<name>` → first three letters of `<name>`, uppercased. |
+
+Placeholder example (use your own values):
 
 ```json
 {
+  "overlay": true,
   "trustedSSIDs": ["<your home Wi-Fi name>"],
-  "codenameSalt": "<any random string, keeps codenames stable>",
-  "profileTags": { ".claude-xyz": "LAB" }
+  "codenameSalt": "<any long random string>",
+  "profileTags": { ".claude-<name>": "LAB" }
 }
 ```
+
+### What it reads
+
+The saver reads only local files and system state. Only the optional collector
+touches credentials or the network.
+
+**The saver** (sandboxed, no credentials):
+
+- `~/.claude*/sessions/*.json`: the live per-session files Claude Code writes
+  (status, kind, entrypoint, cwd, timestamps). The free-text `waitingFor` command
+  is reduced to a category and never shown.
+- Background work per session: `~/.claude*/projects/<project>/<session>/subagents/*.meta.json`
+  (and the matching transcript's modification time, never its contents),
+  `~/.claude*/jobs/*/state.json` and `~/.claude*/daemon/roster.json`.
+- Host vitals (load, memory pressure, thermal state, uptime), battery, and the
+  current Wi-Fi name (only to compare with `trustedSSIDs`; never drawn or logged).
+- `~/.config/matrix-diag/config.json` and the collector's state file
+  `~/.local/state/matrix-diag/collector-state.json`.
+
+**The collector** (optional, unsandboxed LaunchAgent, runs every 60 s and fetches each
+source at most every 5 minutes):
+
+- **Keychain:** for each `~/.claude*` directory, the Claude Code OAuth token, read
+  with `/usr/bin/security find-generic-password -s <service> -w` (Claude Code's own
+  keychain item; `security` is the client that item trusts, so no prompts).
+  The token stays in memory and is never written or logged.
+- **Network:** one `GET https://api.anthropic.com/api/oauth/usage` per account with
+  that token (5-hour, 7-day and extra-usage figures). That is the only request the
+  collector itself makes (an allowlist enforces it); it never calls the OAuth
+  refresh endpoint. `gws` and `claude` below make their own requests.
+- **Token refresh:** when an account's token has expired and its data is over 2 h
+  old, at most once an hour it runs `claude -p` (small model, trivial prompt, no
+  tools, no session persistence) with that account's config dir, so Claude Code
+  refreshes its own token. These runs are hidden from the AGENTS panel.
+- **Calendar:** `gws calendar +agenda --days 2 --format json`
+  ([Google Workspace CLI](https://github.com/googleworkspace/cli), the single
+  signed-in account). Only each event's title, start, end and all-day flag are kept.
+- It does **not** read session files, transcripts or repos. It writes only the
+  state file, its log (`~/Library/Logs/matrix-diag/collector.log`: errors and state
+  changes, truncated past 1 MB) and, on install, the config file.
+
+Without the collector, the usage and calendar lines show `COLLECTOR OFFLINE` and
+everything else works.
 
 ## Solarized Dark palette
 
@@ -113,20 +167,123 @@ base3   #eee8d5   bright head glyph orange  #cb4b16
 Column glyphs cycle through cyan → blue → green → violet → yellow; the leading
 "head" glyph is base3 (`#eee8d5`) for the classic bright-tip matrix look.
 
-## Installing the pre-built release
+## Installing a release
 
-Download `SolarizedMatrix.saver.zip`, unzip, then double-click `SolarizedMatrix.saver` to install.
+Download `SolarizedMatrix.saver.zip` from the GitHub release and unzip it. You get
+one folder, `SolarizedMatrix/`:
 
-**"App is damaged" / Gatekeeper warning?**  
-macOS tags files downloaded from the internet with a quarantine attribute and blocks unsigned bundles. Fix it with one command after installing:
+| File | What it is |
+|------|------------|
+| `SolarizedMatrix.saver` | The screensaver. |
+| `matrix-diag-collector` | The optional collector, prebuilt (arm64, ad-hoc signed). |
+| `mise.collector.toml` | Its LaunchAgent declaration and install/uninstall tasks for [mise](https://mise.jdx.dev). |
+| `INSTALL.txt` | A short version of this section. |
+
+### Gatekeeper / quarantine
+
+Both binaries are only ad-hoc signed, and macOS quarantines anything downloaded
+from the internet: the saver then fails with *"App is damaged"* and the collector
+is killed on launch. Clear the quarantine attribute on the unpacked folder first
+(adjust the path to where you unzipped it):
+
+```bash
+xattr -cr ~/Downloads/SolarizedMatrix
+```
+
+or on each installed copy afterwards:
 
 ```bash
 xattr -cr ~/Library/Screen\ Savers/SolarizedMatrix.saver
+xattr -d com.apple.quarantine ~/.local/libexec/matrix-diag/matrix-diag-collector
 ```
 
-Then open System Settings ▸ Screen Saver and pick **SolarizedMatrix**.
+(The mise install below already strips it from the collector copy it installs.)
+Building from source avoids this entirely: locally built files are never quarantined.
 
-**Prefer to avoid the workaround?** Clone the repo and build it yourself (see section below) — locally-built bundles are never quarantined.
+### The screensaver
+
+Double-click `SolarizedMatrix.saver` (macOS asks to install it for the current
+user), or `cp -R SolarizedMatrix.saver ~/Library/Screen\ Savers/`. Then pick it:
+**System Settings → Wallpaper → Screen Saver… → Custom → SolarizedMatrix**
+(macOS 26; earlier versions: **System Settings → Screen Saver**).
+
+### The collector with mise (optional)
+
+Read [What it reads](#what-it-reads) first. From the unpacked folder:
+
+```bash
+cd ~/Downloads/SolarizedMatrix
+mise trust mise.collector.toml
+mise -E collector bootstrap --only macos-launchd-agents,task
+```
+
+That installs the LaunchAgent `~/Library/LaunchAgents/dev.mise.matrix-diag-collector.plist`,
+copies the **prebuilt** `matrix-diag-collector` to `~/.local/libexec/matrix-diag/`
+(stripping quarantine), creates `~/Library/Logs/matrix-diag/`, creates
+`~/.config/matrix-diag/config.json` if it is missing (printing its path), and
+starts the agent. `--only …` skips any bootstrap parts from your global mise
+config; drop it to apply those too. Re-running it (for example from a newer
+release) is safe. Add your `trustedSSIDs` to the config file afterwards.
+
+Uninstall (from the same folder):
+
+```bash
+mise -E collector run collector:uninstall           # agent, plist, binary, logs, state; keeps config
+mise -E collector run collector:uninstall --purge   # ...and the config file (your salt) too
+```
+
+Keeping the config means a reinstall keeps your codenames.
+
+### The collector without mise (optional)
+
+The same install by hand, from the unpacked folder (the label matches the mise
+one, so you can switch later):
+
+```bash
+cd ~/Downloads/SolarizedMatrix
+mkdir -p ~/.local/libexec/matrix-diag ~/Library/Logs/matrix-diag ~/Library/LaunchAgents
+cp matrix-diag-collector ~/.local/libexec/matrix-diag/
+xattr -d com.apple.quarantine ~/.local/libexec/matrix-diag/matrix-diag-collector 2>/dev/null || true
+~/.local/libexec/matrix-diag/matrix-diag-collector --init-config --config ~/.config/matrix-diag/config.json
+
+cat > ~/Library/LaunchAgents/dev.mise.matrix-diag-collector.plist <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>dev.mise.matrix-diag-collector</string>
+  <key>ProgramArguments</key>
+  <array><string>$HOME/.local/libexec/matrix-diag/matrix-diag-collector</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>60</integer>
+  <key>ProcessType</key><string>Background</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key><string>$HOME</string>
+    <key>USER</key><string>$USER</string>
+  </dict>
+  <key>StandardOutPath</key><string>$HOME/Library/Logs/matrix-diag/launchd.log</string>
+  <key>StandardErrorPath</key><string>$HOME/Library/Logs/matrix-diag/launchd.log</string>
+</dict>
+</plist>
+EOF
+
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.mise.matrix-diag-collector.plist
+```
+
+`HOME` and `USER` must be in the agent's environment: `gws` and `claude` need them.
+To update, copy the new binary over the old one (and clear its quarantine), then
+`launchctl kickstart -k gui/$(id -u)/dev.mise.matrix-diag-collector`.
+
+Uninstall by hand:
+
+```bash
+launchctl bootout gui/$(id -u)/dev.mise.matrix-diag-collector
+rm -f ~/Library/LaunchAgents/dev.mise.matrix-diag-collector.plist
+rm -rf ~/.local/libexec/matrix-diag ~/Library/Logs/matrix-diag ~/.local/state/matrix-diag
+rm -rf ~/.config/matrix-diag   # only to purge the config (salt, trusted SSIDs)
+```
 
 ---
 
@@ -141,21 +298,23 @@ mise run build      # compile + ad-hoc sign          -> build/SolarizedMatrix.sa
 mise run test       # build + run the diagnostics-core tests (non-zero on failure)
 mise run snapshot   # render rain + overlay offscreen -> build/snapshot/*.png
 mise run install    # build, then install to ~/Library/Screen Savers and reload
-mise run package    # build, then zip a distributable -> SolarizedMatrix.saver.zip
+mise run package    # build saver + collector, zip   -> SolarizedMatrix.saver.zip
 ```
 
 Set the version in one place — `SM_VERSION` in `mise.toml` — and it's stamped into
 the generated `Info.plist`. Cutting a full GitHub release is documented in the
 `release` skill under `.claude/skills/release/`.
 
-### Installing the collector (optional)
+`mise run package` zips one `SolarizedMatrix/` folder: the saver, the collector
+built by `collector:build` (named `matrix-diag-collector`, next to
+`mise.collector.toml`, which is how the bootstrap task knows to install it instead
+of building), `mise.collector.toml` and `INSTALL.txt`. It fails if either binary
+is not a valid signed Mach-O.
+
+### Installing the collector from a checkout (optional)
 
 The usage and calendar blocks in the SYS panel need the unsandboxed collector, run by
-launchd every 60 s. Every 5 minutes it reads the Claude OAuth token of each `~/.claude*`
-account from the login keychain (via `/usr/bin/security`) and makes one read-only request
-per account to the Claude usage endpoint, and runs `gws calendar +agenda --days 2 --format json`
-(the [Google Workspace CLI](https://github.com/googleworkspace/cli), single signed-in
-account; keeps only each event's title, start, end and all-day flag). It writes
+launchd every 60 s (see [What it reads](#what-it-reads)). It writes
 `~/.local/state/matrix-diag/collector-state.json`. Without it the saver shows
 `COLLECTOR OFFLINE` there and everything else still works. If `gws` is missing or
 signed out (`gws auth login`), the calendar shows `NO SIGNAL` (or its last events,

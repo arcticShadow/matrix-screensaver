@@ -1,20 +1,65 @@
 INSTALL — SolarizedMatrix Screensaver
 ======================================
 
-1. Double-click SolarizedMatrix.saver (inside the build/ folder).
-   macOS will ask whether to install for the current user — click OK.
+This folder contains:
 
-2. If you see "App is damaged and can't be opened":
-   macOS Gatekeeper blocks unsigned bundles downloaded from the internet.
-   Run this command in Terminal after installing:
+  SolarizedMatrix.saver   the screensaver
+  matrix-diag-collector   OPTIONAL collector (Claude usage + next calendar
+                          event for the overlay), prebuilt, arm64
+  mise.collector.toml     installs/uninstalls the collector with mise
+  INSTALL.txt             this file
+
+Full details (what the overlay shows, the config file, and exactly what the
+collector reads, so you can decide whether to install it) are in README.md:
+https://github.com/arcticShadow/matrix-screensaver#installing-a-release
+
+
+0. QUARANTINE FIX (do this first)
+   Both binaries are only ad-hoc signed. macOS quarantines downloads, so the
+   saver fails with "App is damaged" and the collector is killed on launch.
+   Clear the quarantine flag on this folder (adjust the path):
+
+       xattr -cr ~/Downloads/SolarizedMatrix
+
+   If you already installed before doing that:
 
        xattr -cr ~/Library/Screen\ Savers/SolarizedMatrix.saver
+       xattr -d com.apple.quarantine ~/.local/libexec/matrix-diag/matrix-diag-collector
 
-   Then reopen System Settings ▸ Screen Saver.
 
-3. Pick SolarizedMatrix in the list and you're done.
+1. SCREENSAVER
+   Double-click SolarizedMatrix.saver (macOS asks to install it for the
+   current user), then pick it:
+   System Settings > Wallpaper > Screen Saver... > Custom > SolarizedMatrix
+   (older macOS: System Settings > Screen Saver).
 
-ALTERNATIVE — build from source (no workaround needed):
+   Without the collector the overlay still works; its usage and calendar
+   lines show COLLECTOR OFFLINE.
+
+
+2. COLLECTOR WITH MISE (optional, https://mise.jdx.dev)
+   From this folder:
+
+       mise trust mise.collector.toml
+       mise -E collector bootstrap --only macos-launchd-agents,task
+
+   This installs the prebuilt matrix-diag-collector to
+   ~/.local/libexec/matrix-diag/, a LaunchAgent that runs it every 60 s
+   (~/Library/LaunchAgents/dev.mise.matrix-diag-collector.plist), a log dir
+   ~/Library/Logs/matrix-diag/, and ~/.config/matrix-diag/config.json (only
+   if missing, with a random codename salt). Add your trusted Wi-Fi names to
+   "trustedSSIDs" in that file.
+
+   Uninstall (config kept, so codenames survive a reinstall):
+
+       mise -E collector run collector:uninstall
+       mise -E collector run collector:uninstall --purge   # also the config
+
+
+3. COLLECTOR WITHOUT MISE (optional)
+   See "The collector without mise" in README.md for the launchctl steps.
+
+
+ALTERNATIVE — build from source (no quarantine workaround needed):
    Clone https://github.com/arcticShadow/matrix-screensaver and follow
-   the "Building the .saver" steps in README.md. Locally-built bundles
-   are never quarantined by Gatekeeper.
+   "Building the .saver" in README.md.

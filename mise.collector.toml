@@ -6,6 +6,10 @@
 #   mise -E collector bootstrap --dry-run       # show what it would do
 #   mise run collector:uninstall [--purge]      # remove it (config kept unless --purge)
 #
+# From an unpacked release (this file + a prebuilt ./matrix-diag-collector, no
+# mise.toml): `mise trust mise.collector.toml` once, then the same commands, with
+# `mise -E collector run collector:uninstall [--purge]` to remove it.
+#
 # `mise -E collector bootstrap` also applies your global (~/.config/mise) bootstrap
 # parts; add `--only macos-launchd-agents,task` to install just the collector.
 #
