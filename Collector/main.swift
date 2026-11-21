@@ -37,14 +37,21 @@ while let a = argv.popFirst() {
 }
 
 let log = CollectorLog(path: logPath, now: Date.init)
-let envPath = ProcessInfo.processInfo.environment["PATH"]
+let processEnv = ProcessInfo.processInfo.environment
+let envPath = processEnv["PATH"]
 let ctx = CollectorContext(now: Date.init,
                            home: home,
                            config: ConfigLoader.load(path: configPath).config,
                            readKeychain: LiveKeychain.read(service:),
                            http: LiveHTTP.send,
                            userAgent: BinaryResolver.claudeUserAgent(home: home, path: envPath),
-                           log: log)
+                           log: log,
+                           user: realUserName(),
+                           environment: processEnv,
+                           claudePath: BinaryResolver.resolve("claude", home: home, path: envPath),
+                           runProcess: LiveProcess.run,
+                           newSessionID: { UUID().uuidString.lowercased() },
+                           sleep: { Thread.sleep(forTimeInterval: $0) })
 let report = Collector.run(statePath: statePath, sources: CollectorSources.standard(), ctx: ctx, force: force)
 if logPath == nil { for l in log.lines { FileHandle.standardError.write(Data((l + "\n").utf8)) } }
 exit(report.wrote ? 0 : 1)

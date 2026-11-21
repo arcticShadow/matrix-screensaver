@@ -27,7 +27,7 @@ accent colour-per-column.
 | `PanelRenderer.swift` | Draws the diagnostic overlay's panels (AppKit). |
 | `Diagnostics/` | UI-free diagnostics core: config, panel model, panel builders. No AppKit, unit-tested. |
 | `Tests/` | Plain `swiftc` test executable for the core (`mise run test`; no XCTest). |
-| `Collector/` | Optional unsandboxed collector (`mise run collector:build`): per-account Claude usage -> `~/.local/state/matrix-diag/collector-state.json`, which the saver's SYS panel reads. |
+| `Collector/` | Optional unsandboxed collector (`mise run collector:build`): per-account Claude usage -> `~/.local/state/matrix-diag/collector-state.json`, which the saver's SYS panel reads. Expired tokens are refreshed by Claude Code itself via a hidden `claude -p` run (at most hourly, once data is 2 h stale); those runs never appear in AGENTS. |
 | `Harness/` | Offscreen render harness (`mise run snapshot`): renders rain + overlay to PNGs with a fake environment. |
 | `build/SolarizedMatrix.saver/` | Bundle skeleton (`Info.plist` + `MacOS/`). Rebuild the binary from source. |
 | `assets/matrix-preview.svg` | The animated preview shown above. Generated, not hand-edited. |

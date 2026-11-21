@@ -23,6 +23,17 @@ final class FakeCollector {
     private(set) var keychainLookups: [String] = []
     let log: CollectorLog
     var config = DiagConfig()
+    /// `claude -p` refresh runs (Tests/RefreshTests.swift). nil = not installed.
+    var claudePath: String? = "/opt/fake/bin/claude"
+    var inheritedEnv: [String: String] = ["PATH": "/usr/bin:/bin"]
+    /// What a refresh run does; default: the CLI refreshes its token.
+    var onRefresh: ((ProcessSpec) -> ProcessResult)?
+    var refreshDuration: TimeInterval = 4
+    private(set) var processes: [ProcessSpec] = []
+    /// Collector state on disk at the moment each process was launched.
+    private(set) var stateAtLaunch: [CollectorState?] = []
+    private(set) var sleeps: [TimeInterval] = []
+    private var sessionCounter = 0
 
     struct NetworkError: Error {}
 
@@ -69,7 +80,37 @@ final class FakeCollector {
                 return HTTPResponse(status: status, body: Data(body.utf8))
             },
             userAgent: "claude-cli/9.9.9 (external, cli)",
-            log: log)
+            log: log,
+            user: "someone",
+            environment: inheritedEnv,
+            claudePath: claudePath,
+            runProcess: { [unowned self] spec in
+                self.processes.append(spec)
+                self.stateAtLaunch.append(self.state())
+                self.now = self.now.addingTimeInterval(self.refreshDuration)
+                if let f = self.onRefresh { return f(spec) }
+                self.refreshToken(for: spec)
+                return ProcessResult(status: 0, timedOut: false)
+            },
+            newSessionID: { [unowned self] in
+                self.sessionCounter += 1
+                return String(format: "00000000-0000-4000-8000-%012d", self.sessionCounter)
+            },
+            sleep: { [unowned self] s in self.sleeps.append(s); self.now = self.now.addingTimeInterval(s) })
+    }
+
+    /// Config dir basename a refresh process targets (no CLAUDE_CONFIG_DIR = `~/.claude`).
+    func dir(of spec: ProcessSpec) -> String {
+        spec.environment["CLAUDE_CONFIG_DIR"].map { ($0 as NSString).lastPathComponent } ?? ".claude"
+    }
+
+    /// What Claude Code does on a successful run: a new access token (8 h).
+    func refreshToken(for spec: ProcessSpec) {
+        let d = dir(of: spec)
+        guard tokens[d] != nil else { return }
+        let fresh = "tok-fresh-\(processes.count)"
+        addAccount(d, token: fresh, expiresIn: 8 * 3600)
+        if responses[fresh] == nil { responses[fresh] = (200, usageBody(five: 55, seven: 44)) }
     }
 
     @discardableResult

@@ -11,7 +11,8 @@
 //  Layout (schema 1):
 //    { "schema": 1, "generatedAt": <date>,
 //      "schedules": { "<SourceID>": SourceSchedule, ... },   // collector's adaptive policy state
-//      "usage": { "generatedAt": <date>, "accounts": [AccountUsage, ...] } }
+//      "usage": { "generatedAt": <date>, "accounts": [AccountUsage, ...] },
+//      "refresh": { "sessions": [RefreshSession, ...] } }      // #10, optional
 //  Each section carries its own generatedAt (time of its last successful
 //  fetch) and each account its own. Later tickets add sibling sections
 //  (calendar, refresh sessions) as optional members: old readers ignore
@@ -34,14 +35,38 @@ struct CollectorState: Codable, Equatable {
     /// 60 s launchd runs. The saver reads it for staleness.
     var schedules: [SourceID: SourceSchedule] = [:]
     var usage: UsageSection? = nil
+    /// The collector's own `claude -p` token-refresh runs. The saver hides
+    /// these session ids from the AGENTS panel.
+    var refresh: RefreshSection? = nil
 
     init(schema: Int = CollectorState.currentSchema, generatedAt: Date? = nil,
-         schedules: [SourceID: SourceSchedule] = [:], usage: UsageSection? = nil) {
+         schedules: [SourceID: SourceSchedule] = [:], usage: UsageSection? = nil,
+         refresh: RefreshSection? = nil) {
         self.schema = schema
         self.generatedAt = generatedAt
         self.schedules = schedules
         self.usage = usage
+        self.refresh = refresh
     }
+
+    /// Session ids the AGENTS panel must never show or count.
+    var hiddenSessionIDs: Set<String> { Set((refresh?.sessions ?? []).map(\.sessionId)) }
+}
+
+struct RefreshSection: Codable, Equatable {
+    /// Recent refresh runs (pruned after a week), oldest first.
+    var sessions: [RefreshSession]
+}
+
+struct RefreshSession: Codable, Equatable {
+    /// The id passed to `claude --session-id`, recorded before launch.
+    var sessionId: String
+    /// Config dir basename of the refreshed account. Local file only.
+    var dir: String
+    var startedAt: Date
+    var finishedAt: Date? = nil
+    /// "running", "ok", "exit <status>", "timeout" or "launch failed".
+    var outcome: String? = nil
 }
 
 /// Source ids the collector registers (keys of `CollectorState.schedules`).

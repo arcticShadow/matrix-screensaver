@@ -112,6 +112,7 @@ final class DiagnosticsCore {
         return AgentsPanel.build(AgentsInputs(now: now, scan: sec.value, signalLost: failing,
                                               staleMarker: sec.staleMarker, namer: namer,
                                               profileTags: config.profileTags,
+                                              excludedSessionIDs: snap.collector?.value.state?.hiddenSessionIDs ?? [],
                                               maxLines: agentsMaxLines))
     }
 
