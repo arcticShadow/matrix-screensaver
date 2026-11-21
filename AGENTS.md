@@ -86,7 +86,7 @@ This explicit buffer is necessary because `ScreenSaverView.draw()` does not guar
 
 ## Diagnostic overlay
 
-- Active when: not `isPreview` (no `DiagnosticsCore` is even created in preview), main display, and config `overlay` is not `false`. Decided in `setup()` and on `viewDidMoveToWindow`, logged once per decision: `log show --predicate 'subsystem == "law.jude.SolarizedMatrix"'`.
+- Active when: not `isPreview` (no `DiagnosticsCore` is even created in preview), main display, and config `overlay` is not `false`. Decided in `setup()` and on `viewDidMoveToWindow`, logged once per decision at debug level (notice in `SM_FRAME_DUMP` builds): `log show --debug --predicate 'subsystem == "law.jude.SolarizedMatrix"'`.
 - Main display = the view's `window.screen` display ID equals `CGMainDisplayID()` (the menu-bar display, `NSScreen.screens.first`). No window/screen yet → main only if there is one screen. The harness forces it via `displayRoleOverride`.
 - Config is loaded once per `DiagnosticsCore`, i.e. once per saver activation (each activation builds a fresh `MatrixView`).
 - Polling: one `PollerHub.shared` per process runs every source on a background queue (utility QoS, 0.25 s tick checks which sources are due) and publishes an immutable `DiagSnapshot`; the render thread only copies it under a lock. A view leases the hub only while its overlay is active (`decideOverlay`) and releases in `teardown()` (so terminal `didstop` and `stopAnimation` both stop it); the first lease starts the timer, the last release cancels it and drops the engine. The engine/readers come from the first lease's environment.

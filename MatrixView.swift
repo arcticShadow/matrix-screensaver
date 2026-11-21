@@ -260,7 +260,7 @@ final class MatrixView: ScreenSaverView {
         if overlayActive { diagnostics?.startPolling() } else { diagnostics?.stopPolling() }
         logPoller("decide")
         let status = diagnostics.map { "\($0.configStatus)" } ?? "none"
-        Self.log.notice("overlay=\(self.overlayActive, privacy: .public) preview=\(self.isPreview, privacy: .public) main=\(main, privacy: .public) config=\(status, privacy: .public) size=\(Int(self.bounds.width), privacy: .public)x\(Int(self.bounds.height), privacy: .public)")
+        lifecycleLog("overlay=\(overlayActive) preview=\(isPreview) main=\(main) config=\(status) size=\(Int(bounds.width))x\(Int(bounds.height))")
     }
 
     override func viewDidMoveToWindow() {
@@ -322,7 +322,18 @@ final class MatrixView: ScreenSaverView {
 
     private func logPoller(_ event: String) {
         guard let hub = pollerHub else { return }
-        Self.log.notice("poller \(event, privacy: .public) leased=\(self.isPolling, privacy: .public) running=\(hub.isRunning, privacy: .public) leases=\(hub.activeLeases, privacy: .public) starts=\(hub.starts, privacy: .public)")
+        lifecycleLog("poller \(event) leased=\(isPolling) running=\(hub.isRunning) leases=\(hub.activeLeases) starts=\(hub.starts)")
+    }
+
+    /// Overlay/poller lifecycle lines (no private data: flags and counts
+    /// only). Debug level in normal builds, so they cost nothing unless
+    /// `log stream --level debug` asks; notice in SM_FRAME_DUMP builds.
+    private func lifecycleLog(_ line: String) {
+        #if SM_FRAME_DUMP
+        Self.log.notice("\(line, privacy: .public)")
+        #else
+        Self.log.debug("\(line, privacy: .public)")
+        #endif
     }
 
     /// Harness/diagnostics: whether this view currently leases the poller.
