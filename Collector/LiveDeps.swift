@@ -88,3 +88,38 @@ enum BinaryResolver {
         return "claude-cli/\(version) (external, cli)"
     }
 }
+
+enum LiveProcess {
+    /// Run a child with exactly `spec.environment` (the caller has already put
+    /// HOME/USER in it), output discarded, terminated after `spec.timeout`.
+    static func run(_ spec: ProcessSpec) throws -> ProcessResult {
+        try? FileManager.default.createDirectory(atPath: spec.workingDirectory, withIntermediateDirectories: true)
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: spec.executable)
+        p.arguments = spec.arguments
+        p.environment = spec.environment
+        p.currentDirectoryURL = URL(fileURLWithPath: spec.workingDirectory)
+        p.standardInput = FileHandle.nullDevice
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        let done = DispatchSemaphore(value: 0)
+        p.terminationHandler = { _ in done.signal() }
+        try p.run()
+        var timedOut = false
+        if done.wait(timeout: .now() + spec.timeout) == .timedOut {
+            timedOut = true
+            p.terminate()
+            if done.wait(timeout: .now() + 5) == .timedOut {
+                kill(p.processIdentifier, SIGKILL)
+                done.wait()
+            }
+        }
+        return ProcessResult(status: p.terminationStatus, timedOut: timedOut)
+    }
+}
+
+/// Login name from the passwd database (USER may be missing under launchd).
+func realUserName() -> String {
+    if let pw = getpwuid(getuid()), let name = pw.pointee.pw_name { return String(cString: name) }
+    return ProcessInfo.processInfo.environment["USER"] ?? NSUserName()
+}

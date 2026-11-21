@@ -3,7 +3,8 @@
 //  Claude usage per account: for every `~/.claude*` config dir, read its OAuth
 //  token from the keychain and GET the usage endpoint. Never refreshes tokens
 //  (refresh tokens rotate; a race would log the CLI out): an expired token
-//  just marks the account's data stale. #10 adds the `claude -p` refresh.
+//  just marks the account's data stale; once it is 2 h stale, TokenRefresh
+//  has Claude Code refresh it (`claude -p`) and the account is fetched again.
 //
 
 import Foundation
@@ -61,10 +62,15 @@ struct UsageSource: CollectorSource {
                                   uniquingKeysWith: { a, _ in a })
         var accounts: [AccountUsage] = []
         var successes = 0, errors = 0
+        TokenRefresh.prune(&state, now: ctx.now())
         for dir in AccountDiscovery.configDirs(home: ctx.home) {
             let before = previous[dir]
             var a = before ?? AccountUsage(dir: dir, token: .none)
-            let outcome = fetchAccount(&a, ctx)
+            var outcome = fetchAccount(&a, ctx)
+            if TokenRefresh.isDue(a, sessions: state.refresh?.sessions ?? [], now: ctx.now()),
+               TokenRefresh.run(dir: dir, state: &state, ctx: ctx) {
+                outcome = fetchAccount(&a, ctx)
+            }
             switch outcome {
             case .success: successes += 1
             case .error: errors += 1

@@ -45,6 +45,37 @@ struct CollectorContext {
     var http: (HTTPRequest) throws -> HTTPResponse
     var userAgent: String
     var log: CollectorLog
+
+    // Child processes (#10 token refresh). Defaults make a context that can
+    // never launch anything.
+    /// Login name (passwd), passed to children as USER/LOGNAME.
+    var user: String = ""
+    /// The collector's own environment, the base for children's.
+    var environment: [String: String] = [:]
+    /// Resolved `claude` binary (BinaryResolver), nil when not installed.
+    var claudePath: String? = nil
+    /// Live: Foundation.Process with a timeout (LiveProcess).
+    var runProcess: (ProcessSpec) throws -> ProcessResult = { _ in throw ProcessSpec.NoRunner() }
+    var newSessionID: () -> String = { UUID().uuidString.lowercased() }
+    var sleep: (TimeInterval) -> Void = { _ in }
+    /// Persist `state` now (mid-run). Collector.run wires it to the atomic writer.
+    var checkpoint: (CollectorState) -> Void = { _ in }
+}
+
+/// A child process to run: absolute executable, explicit environment.
+struct ProcessSpec: Equatable {
+    struct NoRunner: Error {}
+    var executable: String
+    var arguments: [String]
+    var environment: [String: String]
+    var workingDirectory: String
+    /// Seconds before the child is terminated.
+    var timeout: TimeInterval
+}
+
+struct ProcessResult: Equatable {
+    var status: Int32
+    var timedOut: Bool
 }
 
 /// One collector data source. `fetch` updates its own section of `state`
@@ -71,8 +102,15 @@ enum Collector {
                     sources: [CollectorSource],
                     ctx: CollectorContext,
                     force: Bool = false,
-                    write: (Data, String) throws -> Void = { try AtomicFile.write($0, to: $1) }) -> CollectorRunReport {
+                    write: @escaping (Data, String) throws -> Void = { try AtomicFile.write($0, to: $1) }) -> CollectorRunReport {
         var report = CollectorRunReport()
+        var ctx = ctx
+        let log = ctx.log
+        ctx.checkpoint = { s in
+            do { try write(try CollectorStateStore.encode(s), statePath) } catch {
+                log.error("state checkpoint failed: \(error)")
+            }
+        }
         var state: CollectorState
         do {
             state = try CollectorStateStore.load(path: statePath) ?? CollectorState()

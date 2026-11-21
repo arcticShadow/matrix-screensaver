@@ -145,6 +145,7 @@ final class DiagnosticsCore {
                                               staleMarker: sec.staleMarker,
                                               namer: namer(networkTrust(snap, now)),
                                               profileTags: config.profileTags,
+                                              excludedSessionIDs: snap.collector?.value.state?.hiddenSessionIDs ?? [],
                                               maxLines: agentsMaxLines))
     }
 
