@@ -21,6 +21,12 @@ struct DiagnosticsEnvironment {
     /// queue. Default to the live readers; tests and the harness inject fakes.
     var readVitals: () throws -> HostVitals = HostReaders.vitals
     var readPower: () throws -> PowerStatus = HostReaders.power
+    /// The collector state file reader: always the file under `homeDirectory`
+    /// (tests and the harness write a state file into their fake home).
+    var readCollector: () throws -> CollectorReading {
+        let home = homeDirectory
+        return { try CollectorReader.read(home: home) }
+    }
 
     static func live() -> DiagnosticsEnvironment {
         let home = realHomeDirectory()

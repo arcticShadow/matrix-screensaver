@@ -9,6 +9,9 @@
 //  fake home in `makeWorld` and new scenarios below.
 //
 //  Usage: SnapshotHarness [outDir] [frames]
+//  SM_COLLECTOR_STATE=<path>: also render `overlay-real-usage` from a real
+//  collector state file (copied into the fake home; clock = real now). Local
+//  verification only: the PNG shows real usage numbers by profile tag.
 //
 
 import AppKit
@@ -26,7 +29,8 @@ let t0 = Date(timeIntervalSince1970: 1_795_271_405)
 /// and calls the readers on its background queue.
 final class Clock {
     private let lock = NSLock()
-    private var t = t0
+    private var t: Date
+    init(start: Date = t0) { t = start }
     private var fetches = 0
     var now: Date { lock.lock(); defer { lock.unlock() }; return t }
     func advance(_ s: TimeInterval) { lock.lock(); t = t.addingTimeInterval(s); lock.unlock() }
@@ -46,6 +50,36 @@ struct Scenario {
     var vitalsFailAfterFirst = false
     /// Fake seconds per frame (larger = data ages faster).
     var clockStep: TimeInterval = 1.0 / 30.0
+    /// Collector state file written into the fake home (nil = none: COLLECTOR OFFLINE).
+    var collector: CollectorState? = nil
+    /// Session files to create (config dir basenames), so token-less accounts show.
+    var sessionDirs: [String] = []
+    /// Clock start (default t0).
+    var start: Date = t0
+}
+
+/// A fake collector state at t0: two healthy accounts (one near its limits,
+/// with extra usage), one with an expired token, one without a token.
+func fakeUsageState() -> CollectorState {
+    func acct(_ dir: String, _ five: Double, _ seven: Double, token: AccountUsage.TokenState = .ok,
+              ago: TimeInterval = 40, extra: ExtraUsage? = nil) -> AccountUsage {
+        AccountUsage(dir: dir, token: token, tokenExpiresAt: t0.addingTimeInterval(3600),
+                     generatedAt: t0.addingTimeInterval(-ago),
+                     fiveHour: UsageWindow(utilization: five, resetsAt: t0.addingTimeInterval(2 * 3600 + 14 * 60)),
+                     sevenDay: UsageWindow(utilization: seven, resetsAt: t0.addingTimeInterval(4 * 86400 + 3 * 3600)),
+                     extra: extra)
+    }
+    var sched = SourceSchedule(baseInterval: 300)
+    sched.recordSuccess(at: t0.addingTimeInterval(-40), duration: 1.4)
+    return CollectorState(generatedAt: t0.addingTimeInterval(-40),
+                          schedules: [CollectorSourceIDs.usage: sched],
+                          usage: UsageSection(generatedAt: t0.addingTimeInterval(-40), accounts: [
+                            acct(".claude", 37, 12),
+                            acct(".claude-alpha", 78, 91, extra: ExtraUsage(enabled: true, usedMinor: 1240,
+                                 limitMinor: nil, currency: "NZD", decimalPlaces: 2)),
+                            acct(".claude-beta", 64, 30, token: .expired, ago: 3 * 3600),
+                            AccountUsage(dir: ".claude-gamma", token: .none),
+                          ]))
 }
 
 let scenarios = [
@@ -57,7 +91,16 @@ let scenarios = [
              thermal: .serious),
     Scenario(name: "overlay-stale", debugLines: true, vitalsFailAfterFirst: true, clockStep: 0.2),
     Scenario(name: "overlay-desktop", power: .noBattery),
-]
+    Scenario(name: "overlay-usage", collector: fakeUsageState()),
+] + realUsageScenario()
+
+func realUsageScenario() -> [Scenario] {
+    guard let path = ProcessInfo.processInfo.environment["SM_COLLECTOR_STATE"] else { return [] }
+    guard let st = try? CollectorStateStore.load(path: path) else {
+        print("SM_COLLECTOR_STATE: cannot read state file"); return []
+    }
+    return [Scenario(name: "overlay-real-usage", collector: st, start: Date())]
+}
 
 func makeWorld(_ s: Scenario, clock: Clock) -> DiagnosticsEnvironment {
     let home = "\(outDir)/home-\(s.name)"
@@ -68,6 +111,15 @@ func makeWorld(_ s: Scenario, clock: Clock) -> DiagnosticsEnvironment {
         try? FileManager.default.createDirectory(atPath: (cfg as NSString).deletingLastPathComponent,
                                                  withIntermediateDirectories: true)
         try? json.write(toFile: cfg, atomically: true, encoding: .utf8)
+    }
+    if let st = s.collector, let data = try? CollectorStateStore.encode(st) {
+        try? AtomicFileForHarness.write(data, CollectorStateStore.defaultPath(home: home))
+    }
+    for d in s.sessionDirs {
+        let p = "\(home)/\(d)/sessions/1.json"
+        try? FileManager.default.createDirectory(atPath: (p as NSString).deletingLastPathComponent,
+                                                 withIntermediateDirectories: true)
+        try? "{}".write(toFile: p, atomically: true, encoding: .utf8)
     }
     let thermal = s.thermal, power = s.power, failAfterFirst = s.vitalsFailAfterFirst
     return DiagnosticsEnvironment(now: { clock.now },
@@ -107,7 +159,7 @@ func makeContext() throws -> (NSBitmapImageRep, NSGraphicsContext) {
 }
 
 func render(_ s: Scenario) throws -> String {
-    let clock = Clock()
+    let clock = Clock(start: s.start)
     let env = makeWorld(s, clock: clock)
     let hub = PollerHub(tickInterval: 0.01)
     guard let view = MatrixView(frame: NSRect(origin: .zero, size: size),
@@ -212,3 +264,12 @@ for s in scenarios {
 }
 try autoreleasepool { try sharedPollerCheck() }
 if ProcessInfo.processInfo.environment["TIMING"] == "1" { try autoreleasepool { try frameTimeCheck() } }
+
+
+enum AtomicFileForHarness {
+    static func write(_ data: Data, _ path: String) throws {
+        try FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent,
+                                                withIntermediateDirectories: true)
+        try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+    }
+}
