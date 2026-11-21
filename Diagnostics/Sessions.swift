@@ -80,6 +80,9 @@ struct SessionRecord: Equatable {
     var startedAt: Date?
     /// Process exists and its start time matches procStart.
     var alive: Bool
+    /// Background agents attributed to this session: running subagents plus
+    /// running jobs / live daemon workers carrying its id (live sessions only).
+    var background: Int = 0
 }
 
 struct SessionScan: Equatable {
@@ -88,6 +91,9 @@ struct SessionScan: Equatable {
     var configDirs: [String] = []
     /// Session files skipped because they didn't parse.
     var unreadable: Int = 0
+    /// Running jobs / live daemon workers that match no session (still
+    /// counted in the BACKGROUND total).
+    var unattributedBackground: Int = 0
 }
 
 /// pid, procStart (UTC `ps -o lstart` text) -> alive with that start time.
@@ -99,7 +105,10 @@ enum SessionReader {
     /// Scan every `~/.claude*` config dir. Throws (→ AGENT.LINK: SIGNAL LOST)
     /// when the home or a sessions dir can't be listed, or when session files
     /// exist but none of them parse (a format change must never read as zero).
-    static func scan(home: String, isAlive: LivenessChecker) throws -> SessionScan {
+    /// `background` counts background agents (it caches fallback lookups, so
+    /// the poll source keeps one across scans); `now` is the freshness clock.
+    static func scan(home: String, isAlive: LivenessChecker, now: Date = Date(),
+                     background: BackgroundAgentScanner = BackgroundAgentScanner()) throws -> SessionScan {
         let fm = FileManager.default
         let entries: [String]
         do { entries = try fm.contentsOfDirectory(atPath: home) } catch {
@@ -107,6 +116,7 @@ enum SessionReader {
         }
         var scan = SessionScan()
         var candidates = 0
+        var seenKeys = Set<String>()
         for dir in entries.sorted() where dir == ".claude" || dir.hasPrefix(".claude") {
             var isDir: ObjCBool = false
             let sessions = "\(home)/\(dir)/sessions"
@@ -128,7 +138,19 @@ enum SessionReader {
                 }
                 scan.sessions.append(rec)
             }
+            // Background agents for this dir's live, counted sessions.
+            let first = scan.sessions.firstIndex { $0.configDir == dir } ?? scan.sessions.endIndex
+            let counted = scan.sessions[first...].filter { $0.alive && !AgentsCfg.excludedKinds.contains($0.kind) }
+            seenKeys.formUnion(counted.map { BackgroundAgentScanner.key(dir, $0.sessionId) })
+            let bg = background.count(home: home, configDir: dir,
+                                      sessions: counted.map { ($0.sessionId, $0.cwd) },
+                                      isAlive: isAlive, now: now)
+            for i in first..<scan.sessions.count where counted.contains(where: { $0.pid == scan.sessions[i].pid }) {
+                scan.sessions[i].background = bg.perSession[scan.sessions[i].sessionId] ?? 0
+            }
+            scan.unattributedBackground += bg.unattributed
         }
+        background.retain(keys: seenKeys)
         if candidates > 0, scan.sessions.isEmpty {
             throw SignalLost(description: "no session file parsed")
         }
