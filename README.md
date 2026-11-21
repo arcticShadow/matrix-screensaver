@@ -28,6 +28,7 @@ accent colour-per-column.
 | `Diagnostics/` | UI-free diagnostics core: config, panel model, panel builders. No AppKit, unit-tested. |
 | `Tests/` | Plain `swiftc` test executable for the core (`mise run test`; no XCTest). |
 | `Collector/` | Optional unsandboxed collector (`mise run collector:build`): per-account Claude usage -> `~/.local/state/matrix-diag/collector-state.json`, which the saver's SYS panel reads. |
+| `mise.collector.toml` | Opt-in LaunchAgent install for the collector (`mise -E collector bootstrap`; see below). |
 | `Harness/` | Offscreen render harness (`mise run snapshot`): renders rain + overlay to PNGs with a fake environment. |
 | `build/SolarizedMatrix.saver/` | Bundle skeleton (`Info.plist` + `MacOS/`). Rebuild the binary from source. |
 | `assets/matrix-preview.svg` | The animated preview shown above. Generated, not hand-edited. |
@@ -118,6 +119,39 @@ mise run package    # build, then zip a distributable -> SolarizedMatrix.saver.z
 Set the version in one place — `SM_VERSION` in `mise.toml` — and it's stamped into
 the generated `Info.plist`. Cutting a full GitHub release is documented in the
 `release` skill under `.claude/skills/release/`.
+
+### Installing the collector (optional)
+
+The usage block in the SYS panel needs the unsandboxed collector, run by launchd
+every 60 s. It reads the Claude OAuth token of each `~/.claude*` account from the
+login keychain (via `/usr/bin/security`), makes one read-only request per account to
+the Claude usage endpoint, and writes `~/.local/state/matrix-diag/collector-state.json`.
+Without it the saver shows `COLLECTOR OFFLINE` there and everything else still works.
+
+It is opt-in: it lives in `mise.collector.toml`, which only loads with `-E collector`,
+so a plain `mise bootstrap` (or your global machine bootstrap) never installs it.
+
+```bash
+mise -E collector bootstrap             # install or update, then (re)start the agent
+mise -E collector bootstrap --dry-run   # preview
+mise run collector:uninstall            # unload + remove agent, binary, logs, state
+mise run collector:uninstall --purge    # ...and the config file too
+```
+
+`mise -E collector bootstrap` also applies your global mise bootstrap parts; add
+`--only macos-launchd-agents,task` to install just the collector. It installs:
+
+- the LaunchAgent `~/Library/LaunchAgents/dev.mise.matrix-diag-collector.plist`
+- the binary `~/.local/libexec/matrix-diag/matrix-diag-collector` (built from source,
+  or copied from a prebuilt `matrix-diag-collector` next to `mise.collector.toml`)
+- logs in `~/Library/Logs/matrix-diag/` (`collector.log`: errors and changes only)
+- `~/.config/matrix-diag/config.json`, **only if missing**, with defaults and a random
+  codename salt. Its path is printed; add your trusted SSIDs there. It is never
+  overwritten, and uninstall keeps it (unless `--purge`) so your codenames survive a
+  reinstall.
+
+Re-running the bootstrap is safe: it reinstalls the binary only if it changed and
+restarts the agent. `mise run install` (the saver) is unaffected.
 
 ### By hand
 

@@ -29,7 +29,9 @@
 | `Collector/` | The unsandboxed collector executable (`mise run collector:build`): `Collector.swift` run loop + `CollectorSource` protocol + `AtomicFile`, `UsageSource.swift` (keychain naming, discovery, usage endpoint), `LiveDeps.swift` (`security`, URLSession allowlist, binary resolution), `CollectorLog.swift`, `main.swift`. |
 | `Tests/` | Plain `swiftc` test executable (`main.swift` lists suites, `TestKit.swift` assertion helper, one `*Tests.swift` per seam). |
 | `Harness/main.swift` | Offscreen render harness: real MatrixView + fake environment -> PNGs. |
-| `mise.toml` | `build`, `test`, `snapshot`, `install`, `package`, `preview`, `clean` tasks. **Authoritative build commands.** |
+| `mise.toml` | `build`, `test`, `snapshot`, `install`, `package`, `preview`, `clean`, `collector:build` tasks, plus a `collector:uninstall` that delegates to `mise.collector.toml`. **Authoritative build commands.** Never put a `bootstrap` task here (it would make a plain `mise bootstrap` install the collector). |
+| `mise.collector.toml` | Opt-in collector install (`mise -E collector bootstrap`): the LaunchAgent `dev.mise.matrix-diag-collector`, the idempotent `bootstrap` task (install binary to `~/.local/libexec/matrix-diag/`, log dir, `--init-config`, kickstart) and the real `collector:uninstall [--purge]`. Self-contained so a release zip can ship it without `mise.toml`. |
+| `Collector/ConfigInit.swift` | `ConfigInitializer.createIfMissing` behind `matrix-diag-collector --init-config`: config with defaults + random salt, 0600, O_EXCL, never overwrites. |
 | `README.md` | Palette reference, build steps, design notes. |
 | `AGENTS.md` | This file. |
 
@@ -40,7 +42,11 @@ mise run test       # swiftc Diagnostics/*.swift Tests/*.swift -> build/tests/Di
 mise run build      # swiftc MatrixView.swift PanelRenderer.swift Diagnostics/*.swift -> Mach-O bundle, ad-hoc signed
 mise run snapshot   # offscreen render to build/snapshot/*.png (+ overlay-debug/-stale/-desktop) and a shared-poller/teardown check; TIMING=1 adds a frame-time check
 mise run install    # build + copy to ~/Library/Screen Savers + kill the hosts so they reload
+mise -E collector bootstrap   # opt-in: install/update the collector LaunchAgent (mise.collector.toml)
+mise run collector:uninstall  # remove agent, plist, binary, logs, state; --purge also removes the config
 ```
+
+mise loads LaunchAgents (bootstrap step 5) before the `bootstrap` task (step 9), so on a first install the agent's first run finds no binary; the task kickstarts it at the end. The task runs on every bootstrap and must stay idempotent. `--init-config` is passed `--config "$HOME/..."` explicitly because the binary otherwise resolves home with `getpwuid`, while the uninstall uses `$HOME`.
 
 `mise.toml` holds the exact `swiftc` invocations. The `build/` directory and compiled `.saver` are gitignored — always build from source; put every build/test artifact under `build/`.
 

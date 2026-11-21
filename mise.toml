@@ -7,6 +7,8 @@
 #   mise run clean      # remove the built bundle and the zip
 #   mise run test       # compile Diagnostics/ + Tests/ into build/tests and run (non-zero on failure)
 #   mise run collector:build  # compile the collector  -> build/collector/matrix-diag-collector
+#   mise -E collector bootstrap       # OPT-IN: install the collector LaunchAgent (mise.collector.toml)
+#   mise run collector:uninstall [--purge]  # remove it again (config kept unless --purge)
 #   mise run snapshot   # render rain + overlay offscreen to PNGs in build/snapshot (no screensaver host)
 #
 # Cutting a release is driven by the `release` skill in .claude/skills/release/,
@@ -100,6 +102,17 @@ swiftc Diagnostics/*.swift Collector/*.swift \
   -target arm64-apple-macosx13.0
 codesign -f -s - build/collector/matrix-diag-collector
 echo "Built build/collector/matrix-diag-collector"
+'''
+
+# The real uninstall lives in mise.collector.toml (so a release zip, which ships
+# only that file, has it too). This makes it reachable without `-E collector`;
+# with -E collector the same-named task there takes precedence (no recursion).
+[tasks."collector:uninstall"]
+description = "Remove the collector LaunchAgent, binary, logs and state (config kept unless --purge)"
+usage = 'flag "--purge" help="Also delete the config file"'
+run = '''
+if [ "${usage_purge:-false}" = "true" ]; then exec mise -E collector run collector:uninstall --purge
+else exec mise -E collector run collector:uninstall; fi
 '''
 
 [tasks.snapshot]

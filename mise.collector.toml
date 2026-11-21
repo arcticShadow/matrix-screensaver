@@ -1,0 +1,113 @@
+# mise.collector.toml — OPT-IN install of the matrix-diag collector LaunchAgent.
+# Loaded only with `-E collector` (MISE_ENV=collector), so a plain `mise bootstrap`
+# or a global machine bootstrap never installs it. Docs: https://mise.jdx.dev/bootstrap.html
+#
+#   mise -E collector bootstrap                 # install / update + (re)start the agent
+#   mise -E collector bootstrap --dry-run       # show what it would do
+#   mise run collector:uninstall [--purge]      # remove it (config kept unless --purge)
+#
+# `mise -E collector bootstrap` also applies your global (~/.config/mise) bootstrap
+# parts; add `--only macos-launchd-agents,task` to install just the collector.
+#
+# Order matters: mise loads the LaunchAgent (step 5) BEFORE it runs the `bootstrap`
+# task (step 9), so on a first install the agent's first run finds no binary. The
+# task installs the binary and then kickstarts the agent. It runs on every
+# bootstrap, so it is idempotent.
+
+min_version = { hard = "2026.10.20" }
+
+# Label: dev.mise.matrix-diag-collector -> ~/Library/LaunchAgents/dev.mise.matrix-diag-collector.plist
+[bootstrap.macos.launchd.agents.matrix-diag-collector]
+program = "~/.local/libexec/matrix-diag/matrix-diag-collector"
+args = []
+start_interval = 60
+run_at_load = true
+process_type = "Background"
+# launchd gives agents a bare environment. `~` is not expanded here, so use env.HOME.
+# USER and HOME must reach gws/claude child processes (gws keys its keychain item on $USER).
+environment = { PATH = "{{ env.HOME }}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", HOME = "{{ env.HOME }}", USER = "{{ env.USER }}" }
+# The collector keeps its own log (collector.log, errors + changes only); this
+# catches anything else (crashes, launchd spawn errors).
+stdout_path = "~/Library/Logs/matrix-diag/launchd.log"
+stderr_path = "~/Library/Logs/matrix-diag/launchd.log"
+
+[tasks.bootstrap]
+description = "Install the collector binary, log dir and (if missing) config, then kickstart the agent"
+dir = "{{ config_root }}"
+run = '''
+set -eu
+label="dev.mise.matrix-diag-collector"
+dest="$HOME/.local/libexec/matrix-diag"
+bin="$dest/matrix-diag-collector"
+
+# A release zip ships a prebuilt binary next to this file; a checkout builds from source.
+if [ -f ./matrix-diag-collector ]; then
+  src="./matrix-diag-collector"
+  echo "Using prebuilt $src"
+elif [ -f ./Collector/main.swift ]; then
+  mise run collector:build
+  src="build/collector/matrix-diag-collector"
+else
+  echo "ERROR: no prebuilt ./matrix-diag-collector and no Collector/ sources here" >&2
+  exit 1
+fi
+
+mkdir -p "$dest" "$HOME/Library/Logs/matrix-diag" "$HOME/.local/state/matrix-diag"
+if cmp -s "$src" "$bin"; then
+  echo "Collector binary unchanged: $bin"
+else
+  # Copy then rename, so a run in progress never sees a half-written binary.
+  cp "$src" "$bin.new"
+  chmod 0755 "$bin.new"
+  xattr -d com.apple.quarantine "$bin.new" 2>/dev/null || true
+  mv -f "$bin.new" "$bin"
+  echo "Installed $bin"
+fi
+
+# Creates the config with defaults + a random codename salt ONLY if it is missing
+# (never overwrites), and prints its path.
+"$bin" --init-config --config "$HOME/.config/matrix-diag/config.json"
+
+target="gui/$(id -u)/$label"
+if launchctl print "$target" >/dev/null 2>&1; then
+  launchctl kickstart -k "$target"
+  echo "Started $label (runs every 60 s; log: ~/Library/Logs/matrix-diag/collector.log)"
+else
+  echo "WARNING: $label is not loaded; run the full 'mise -E collector bootstrap'" >&2
+fi
+'''
+
+[tasks."collector:uninstall"]
+description = "Unload + remove the collector LaunchAgent, binary, logs and state (config kept unless --purge)"
+usage = 'flag "--purge" help="Also delete the config file (~/.config/matrix-diag/config.json)"'
+run = '''
+set -eu
+name="matrix-diag-collector"
+label="dev.mise.$name"
+target="gui/$(id -u)/$label"
+plist="$HOME/Library/LaunchAgents/$label.plist"
+config="$HOME/.config/matrix-diag/config.json"
+
+# mise's own removal (unloads the agent and deletes its plist) ...
+mise bootstrap services remove "$name" </dev/null || echo "mise bootstrap services remove failed; falling back to launchctl" >&2
+# ... then launchctl as the fallback, in case it is still loaded.
+if launchctl print "$target" >/dev/null 2>&1; then
+  launchctl bootout "$target" 2>/dev/null || launchctl bootout "gui/$(id -u)" "$plist" 2>/dev/null || true
+fi
+rm -f "$plist"
+rm -rf "$HOME/.local/libexec/matrix-diag" "$HOME/Library/Logs/matrix-diag" "$HOME/.local/state/matrix-diag"
+
+if [ "${usage_purge:-false}" = "true" ]; then
+  rm -f "$config"
+  rmdir "$HOME/.config/matrix-diag" 2>/dev/null || true
+  echo "Removed config $config"
+else
+  [ -f "$config" ] && echo "Kept config $config (codename salt + trusted SSIDs); --purge removes it"
+fi
+
+if launchctl print "$target" >/dev/null 2>&1 || [ -e "$plist" ]; then
+  echo "ERROR: $label is still installed" >&2
+  exit 1
+fi
+echo "Collector uninstalled."
+'''

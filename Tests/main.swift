@@ -4,6 +4,7 @@
 //
 
 configTests()
+configInitTests()
 sysPanelTests()
 coreTests()
 pollerTests()
