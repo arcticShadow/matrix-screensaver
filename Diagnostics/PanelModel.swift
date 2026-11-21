@@ -39,6 +39,8 @@ struct PanelLine: Equatable {
     var label: String
     var value: String
     var severity: Severity
+    /// Attention alert: the renderer pulses this row red.
+    var pulse = false
 
     static func field(_ label: String, _ value: String, _ severity: Severity = .normal) -> PanelLine {
         PanelLine(style: .field, label: label, value: value, severity: severity)
@@ -58,6 +60,8 @@ struct Panel: Equatable {
     /// Short id shown in the title bar, e.g. "SYS", "AGENTS".
     var title: String
     var lines: [PanelLine]
+    /// Attention alert: the renderer pulses the panel border red.
+    var pulse = false
 
     /// The value of the first `.field` line with this label, if any.
     func value(of label: String) -> String? {

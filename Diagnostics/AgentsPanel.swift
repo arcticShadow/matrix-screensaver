@@ -107,7 +107,8 @@ enum AgentsPanel {
             .field("AGENT.LINK", "ONLINE", .ok),
             .field("RUNNING", "\(live.count)"),
             .field("ACTIVE", "\(active)", active > 0 ? .ok : .dim),
-            .field("ATTENTION", "\(attention)", attention > 0 ? .alert : .dim),
+            PanelLine(style: .field, label: "ATTENTION", value: "\(attention)",
+                      severity: attention > 0 ? .alert : .dim, pulse: attention > 0),
             .field("AWAITING", "\(awaiting)", awaiting > 0 ? .warn : .dim),
             .field("DORMANT", "\(dormant)", .dim),
             .section("ROSTER", marker: inp.staleMarker),
@@ -133,7 +134,7 @@ enum AgentsPanel {
             rows = Array(rows.prefix(keep)) + [.text("+\(more) more", .dim)]
         }
         lines += rows + tail
-        return Panel(title: "AGENTS", lines: lines)
+        return Panel(title: "AGENTS", lines: lines, pulse: attention > 0)
     }
 
     private static func rosterOrder(_ a: ClassifiedSession, _ b: ClassifiedSession) -> Bool {

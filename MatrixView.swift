@@ -45,6 +45,19 @@ final class MatrixView: ScreenSaverView {
         // Diagnostic overlay (panels drawn over the rain on the main display).
         static let overlayFontSize: CGFloat = 15
         static let overlayMargin:   CGFloat = 48     // inset from the screen edge, points
+
+        // Attention alerts (rendering only; WHEN the banner fires — 30 s wait
+        // threshold, 60 s period, 4 s duration — is decided by AlertsCfg in the core).
+        static let pulsePeriod:     Double  = 1.2    // seconds per red pulse of the AGENTS border/row
+        static let bannerFontSize:  CGFloat = 30
+        // While the banner shows, the trail fade runs toward a dark red at this
+        // multiple of fadeAlpha and new rain glyphs fall red: the screen washes
+        // red within the banner's ~4 s, then fades back at the normal trail rate.
+        static let glitchWashRate:  CGFloat = 1.5
+        static let glitchBurst:     Double  = 0.8    // seconds of slice glitch at the banner's start...
+        static let glitchTailBurst: Double  = 0.3    // ...and at its end
+        static let glitchBands:     Int     = 6      // displaced rain slices per burst frame
+        static let glitchShift:     CGFloat = 70     // max horizontal slice displacement, points
         // Hidden debug lines: per-source fetch time and effective poll interval.
         // (Always on in SM_FRAME_DUMP real-host verification builds.)
         #if SM_FRAME_DUMP
@@ -63,6 +76,9 @@ final class MatrixView: ScreenSaverView {
                        blue:    CGFloat(v & 0xff) / 255, alpha: 1)
     }
     private let base03    = hex("002b36")
+    private let alertRed  = hex("dc322f")
+    private let alertWash = hex("3d0c10")   // background the rain fades toward during the banner
+    private let alertRain: [NSColor] = ["dc322f", "cb4b16", "d33682"].map(hex)
     private let headColor = hex("eee8d5")
     private let stream: [NSColor] = ["2aa198","268bd2","859900","6c71c4","b58900"].map(hex)
     // Logo-stream palette — brighter warm greens & teals so the logo shape reads
@@ -126,6 +142,8 @@ final class MatrixView: ScreenSaverView {
     private var panelRenderer: PanelRenderer?
     /// Decided in setup(): not preview, main display, and config `overlay` on.
     private var overlayActive = false
+    /// Overlay frames drawn (drives the pulse phase).
+    private var alertFrame = 0
     /// Test/harness hook: force the main-display decision (nil = detect).
     var displayRoleOverride: Bool?
     private static let log = Logger(subsystem: "law.jude.SolarizedMatrix", category: "overlay")
@@ -136,6 +154,7 @@ final class MatrixView: ScreenSaverView {
     private lazy var font: NSFont = NSFont(name: "SF Mono", size: Cfg.fontSize)
         ?? NSFont.monospacedSystemFont(ofSize: Cfg.fontSize, weight: .semibold)
     private var colBodyAttrs: [[NSAttributedString.Key: Any]] = []
+    private var colAlertAttrs: [[NSAttributedString.Key: Any]] = []   // red body glyphs during the banner
     private var colHeadAttrs: [[NSAttributedString.Key: Any]] = []
 
     // MARK: - Logo "ghost" rain state
@@ -202,6 +221,7 @@ final class MatrixView: ScreenSaverView {
         logoColChar = (0..<cols).map { _ in (0..<Cfg.logoStreams).map { _ in rc() } }
 
         colBodyAttrs = (0..<cols).map { attrs(colColor[$0], colAlpha[$0]) }
+        colAlertAttrs = (0..<cols).map { attrs(alertRain[$0 % alertRain.count], colAlpha[$0]) }
         colHeadAttrs = (0..<cols).map { attrs(headColor, colAlpha[$0]) }
 
         buffer  = makeBuffer()
@@ -225,7 +245,7 @@ final class MatrixView: ScreenSaverView {
         let main = isMainDisplay
         overlayActive = !isPreview && main && (diagnostics?.overlayEnabled ?? false)
         if overlayActive, panelRenderer == nil {
-            panelRenderer = PanelRenderer(style: .init(fontSize: Cfg.overlayFontSize))
+            panelRenderer = PanelRenderer(style: .init(fontSize: Cfg.overlayFontSize, bannerFontSize: Cfg.bannerFontSize))
         }
         // Only a view that shows the overlay holds a lease on the shared poller.
         if overlayActive { diagnostics?.startPolling() } else { diagnostics?.stopPolling() }
@@ -252,9 +272,9 @@ final class MatrixView: ScreenSaverView {
         buffer       = nil
         drops        = []; colColor    = []; colAlpha     = []
         colChar      = []; colHead     = []; colResetAt   = []
-        colBodyAttrs = []; colHeadAttrs = []
+        colBodyAttrs = []; colHeadAttrs = []; colAlertAttrs = []
         logoMask     = []; logoDrops   = []; logoColChar  = []
-        panelRenderer = nil; overlayActive = false
+        panelRenderer = nil; overlayActive = false; alertFrame = 0
         if diagnostics?.isPolling == true {
             diagnostics?.stopPolling()   // last view out stops the shared poller
             logPoller("teardown")
@@ -324,12 +344,22 @@ final class MatrixView: ScreenSaverView {
     // it), so the saver renders itself through the normal draw path into a
     // bitmap and writes a PNG into its own (sandbox container) temp dir.
     private var dumpFrameCount = 0
+    // Banner dumps: one in the opening glitch burst and one in the steady
+    // red wash of each takeover banner (first few banners only).
+    private var lastBannerElapsed: Double?
+    private var prevBannerElapsed: Double?
+    private var bannerDumps = 0
     private func dumpFrameIfDue() {
         dumpFrameCount += 1
-        guard !dismissed, dumpFrameCount == 150 || dumpFrameCount % 1800 == 0,
+        let e = lastBannerElapsed, prev = prevBannerElapsed ?? -1
+        prevBannerElapsed = e
+        let bannerDue = bannerDumps < 6 && e.map { e in [0.35, 2.0].contains { prev < $0 && e >= $0 } } == true
+        guard !dismissed, bannerDue || dumpFrameCount == 150 || dumpFrameCount % 1800 == 0,
               let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return }
+        if bannerDue { bannerDumps += 1 }
         cacheDisplay(in: bounds, to: rep)
-        let name = "SolarizedMatrix-frame-\(getpid())-\(isPreview ? "preview" : "main")-\(dumpFrameCount).png"
+        let tag = bannerDue ? String(format: "-banner%.1f", e ?? 0) : ""
+        let name = "SolarizedMatrix-frame-\(getpid())-\(isPreview ? "preview" : "main")-\(dumpFrameCount)\(tag).png"
         let path = (NSTemporaryDirectory() as NSString).appendingPathComponent(name)
         let ok = (try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))) != nil
         Self.log.notice("frame dump \(name, privacy: .public) ok=\(ok, privacy: .public)")
@@ -337,15 +367,21 @@ final class MatrixView: ScreenSaverView {
 
     // Draw-time stats over the last window of frames, logged with each dump
     // window: lets the real host show whether polling makes the rain stutter.
+    // Frames drawn while the takeover banner/glitch runs are tallied
+    // separately (banner=true) so the glitch's cost shows on its own.
     private var drawTimes: [UInt64] = []
+    private var bannerDrawTimes: [UInt64] = []
     private func recordDrawTime(_ ns: UInt64) {
         guard !dismissed else { return }
-        drawTimes.append(ns)
-        guard drawTimes.count >= 300 else { return }
-        let sorted = drawTimes.sorted()
+        let inBanner = lastBannerElapsed != nil
+        if inBanner { bannerDrawTimes.append(ns) } else { drawTimes.append(ns) }
+        let window = inBanner ? 100 : 300
+        let times = inBanner ? bannerDrawTimes : drawTimes
+        guard times.count >= window else { return }
+        let sorted = times.sorted()
         let ms = { (q: Double) in Double(sorted[min(sorted.count - 1, Int(Double(sorted.count) * q))]) / 1e6 }
-        Self.log.notice("draw ms p50=\(ms(0.5), privacy: .public) p99=\(ms(0.99), privacy: .public) max=\(ms(1.0), privacy: .public) n=\(sorted.count, privacy: .public) polling=\(self.isPolling, privacy: .public)")
-        drawTimes.removeAll(keepingCapacity: true)
+        Self.log.notice("draw ms p50=\(ms(0.5), privacy: .public) p99=\(ms(0.99), privacy: .public) max=\(ms(1.0), privacy: .public) n=\(sorted.count, privacy: .public) polling=\(self.isPolling, privacy: .public) banner=\(inBanner, privacy: .public)")
+        if inBanner { bannerDrawTimes.removeAll(keepingCapacity: true) } else { drawTimes.removeAll(keepingCapacity: true) }
     }
     #endif
 
@@ -381,8 +417,20 @@ final class MatrixView: ScreenSaverView {
         logoEnv += (logoEnvTarget - logoEnv) * Cfg.logoFadeSpeed
         let logoAlphaNow = Cfg.logoAlphaMax * logoEnv
 
+        // Attention takeover banner: decided by the core, asked once per frame.
+        // While it shows, the rain itself turns red (wash + red glyphs, both in
+        // the buffer, so it costs nothing extra and fades back out with the trails).
+        let banner = overlayActive ? diagnostics?.banner() : nil
+        #if SM_FRAME_DUMP
+        lastBannerElapsed = banner?.elapsed
+        #endif
+
         // Step 1: fade buffer toward base03 (builds the glowing trail effect)
-        buf.setFillColor(base03.withAlphaComponent(Cfg.fadeAlpha).cgColor)
+        if banner == nil {
+            buf.setFillColor(base03.withAlphaComponent(Cfg.fadeAlpha).cgColor)
+        } else {
+            buf.setFillColor(alertWash.withAlphaComponent(Cfg.fadeAlpha * Cfg.glitchWashRate).cgColor)
+        }
         buf.fill(CGRect(x: 0, y: 0, width: bw, height: bh))
 
         // Step 2: draw new glyph positions into the buffer via AppKit text APIs
@@ -400,7 +448,8 @@ final class MatrixView: ScreenSaverView {
 
             if Double.random(in: 0...1) > 0.92 { colChar[i] = rc() }
 
-            drawGlyph(colChar[i], at: CGPoint(x: x, y: yTop), attrs: colBodyAttrs[i])
+            drawGlyph(colChar[i], at: CGPoint(x: x, y: yTop),
+                      attrs: banner == nil ? colBodyAttrs[i] : colAlertAttrs[i])
             drawGlyph(colHead[i], at: CGPoint(x: x, y: yTop - Cfg.fontSize),
                       attrs: colHeadAttrs[i])
 
@@ -414,6 +463,7 @@ final class MatrixView: ScreenSaverView {
                 colHead[i]    = rh()
                 colResetAt[i] = resetThreshold(bufH: bh)
                 colBodyAttrs[i] = attrs(colColor[i], colAlpha[i])
+                colAlertAttrs[i] = attrs(alertRain.randomElement()!, colAlpha[i])
                 colHeadAttrs[i] = attrs(headColor, colAlpha[i])
             }
 
@@ -441,20 +491,59 @@ final class MatrixView: ScreenSaverView {
         NSGraphicsContext.restoreGraphicsState()
 
         // Step 3: blit accumulated buffer to screen
-        if let img = buf.makeImage() {
-            screenCtx.draw(img, in: bounds)
-        }
+        let img = buf.makeImage()
+        if let img { screenCtx.draw(img, in: bounds) }
 
         // Step 4: diagnostic overlay, straight into the screen context (never
         // the fading buffer) so it stays crisp. Panel models are rebuilt every
         // frame so the clock ticks.
         // Corners and widths come from the core's layout; the AGENTS roster is
         // capped to the lines that fit the screen height.
+        //
+        // Attention alerts: the slice glitch goes on the screen ctx (never the
+        // buffer, so displaced slices don't smear into the trails), under the
+        // panels, with the banner on top of everything.
         if overlayActive, let core = diagnostics, let renderer = panelRenderer {
+            alertFrame += 1
+            if let banner, inBurst(banner), let img { drawGlitch(screenCtx, rain: img) }
+            let t = Double(alertFrame) * animationTimeInterval / Cfg.pulsePeriod
+            let pulse = CGFloat(0.5 - 0.5 * cos(2 * Double.pi * t))
             core.agentsMaxLines = renderer.lineCapacity(height: bounds.height - 2 * Cfg.overlayMargin)
             for placed in core.layout() {
-                renderer.draw(placed, in: bounds, margin: Cfg.overlayMargin)
+                renderer.draw(placed, in: bounds, margin: Cfg.overlayMargin, pulse: pulse)
             }
+            if let banner {
+                renderer.drawBanner(banner.text, in: bounds, alpha: glitchEnvelope(banner),
+                                    jitter: inBurst(banner) && Bool.random() ? CGFloat.random(in: -8...8) : 0)
+            }
+        }
+    }
+
+    // MARK: - Attention glitch
+
+    /// 0→1 over the first 0.15 s, 1→0 over the last 0.3 s.
+    private func glitchEnvelope(_ b: AlertBanner) -> CGFloat {
+        CGFloat(max(0, min(1, b.elapsed / 0.15, (b.duration - b.elapsed) / 0.3)))
+    }
+
+    private func inBurst(_ b: AlertBanner) -> Bool {
+        b.elapsed < Cfg.glitchBurst || b.duration - b.elapsed < Cfg.glitchTailBurst
+    }
+
+    /// During the bursts: a few horizontal slices of the rain displaced
+    /// sideways and flashed red. Clipped redraws of the frame image the blit
+    /// already made, so the cost is proportional to the slices' area.
+    private func drawGlitch(_ ctx: CGContext, rain img: CGImage) {
+        for _ in 0..<Cfg.glitchBands {
+            let h = CGFloat.random(in: 4...46)
+            let band = CGRect(x: bounds.minX, y: CGFloat.random(in: bounds.minY...(bounds.maxY - h)),
+                              width: bounds.width, height: h)
+            ctx.saveGState()
+            ctx.clip(to: band)
+            ctx.draw(img, in: bounds.offsetBy(dx: CGFloat.random(in: -Cfg.glitchShift...Cfg.glitchShift), dy: 0))
+            ctx.setFillColor(alertRed.withAlphaComponent(CGFloat.random(in: 0.12...0.35)).cgColor)
+            ctx.fill(band)
+            ctx.restoreGState()
         }
     }
 

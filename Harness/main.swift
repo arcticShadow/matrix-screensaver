@@ -48,6 +48,8 @@ struct Scenario {
     var clockStep: TimeInterval = 1.0 / 30.0
     /// Fake `~/.claude*` session files written into the scratch home.
     var sessions: [HarnessSession] = []
+    /// Frames to render (nil = the command-line count).
+    var frames: Int? = nil
 }
 
 /// One fake session file (neutral names and paths only).
@@ -88,6 +90,16 @@ let demoSessions: [HarnessSession] = {
     return s
 }()
 
+/// Two sessions at a prompt (25 s and 12 s ago) among busy/idle ones.
+let alertSessions: [HarnessSession] = [
+    .init(pid: 4101, cwd: "/home/demo/code/alpha", status: "waiting",
+          waitingFor: "approve Bash: make deploy", ago: 25),
+    .init(dir: ".claude-alpha", pid: 4102, cwd: "/home/demo/code/beta", status: "waiting",
+          waitingFor: "permission prompt", ago: 12),
+    .init(pid: 4103, cwd: "/home/demo/code/gamma", status: "busy", ago: 640),
+    .init(dir: ".claude-beta", pid: 4106, cwd: "/home/demo/code/epsilon", status: "idle", ago: 180),
+]
+
 let scenarios = [
     Scenario(name: "overlay"),
     Scenario(name: "overlay-off", configJSON: #"{ "overlay": false }"#),
@@ -99,6 +111,18 @@ let scenarios = [
     Scenario(name: "overlay-desktop", power: .noBattery),
     Scenario(name: "agents", configJSON: #"{ "codenameSalt": "harness-demo" }"#, sessions: demoSessions),
     Scenario(name: "agents-signal-lost", sessions: [.init(pid: 1, cwd: "/x", status: "busy", ago: 1)]),
+    // Attention alerts. The oldest waiting session (4101) reaches 30 s at
+    // frame 150 (5 s), so the banner starts there: frame 162 is inside the
+    // opening glitch burst, frame 210 in the steady red tint, frame 300 after
+    // the banner (pulse only, rain washing back). Frame 126: pulse at its peak, no banner yet.
+    Scenario(name: "alert-pulse", configJSON: #"{ "codenameSalt": "harness-demo" }"#,
+             sessions: alertSessions, frames: 126),
+    Scenario(name: "alert-glitch", configJSON: #"{ "codenameSalt": "harness-demo" }"#,
+             sessions: alertSessions, frames: 162),
+    Scenario(name: "alert-banner", configJSON: #"{ "codenameSalt": "harness-demo" }"#,
+             sessions: alertSessions, frames: 210),
+    Scenario(name: "alert-after", configJSON: #"{ "codenameSalt": "harness-demo" }"#,
+             sessions: alertSessions, frames: 300),
 ]
 
 func makeWorld(_ s: Scenario, clock: Clock) -> DiagnosticsEnvironment {
@@ -179,7 +203,7 @@ func render(_ s: Scenario) throws -> String {
 
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = ctx
-    for i in 0..<frames {
+    for i in 0..<(s.frames ?? frames) {
         view.animateOneFrame()
         // Let the first fetch land before frame 1 so snapshots are deterministic.
         if i == 0, view.isPolling { _ = waitFor { clock.vitalsFetches > 0 } ; Thread.sleep(forTimeInterval: 0.02) }
@@ -264,6 +288,44 @@ func frameTimeCheck() throws {
                  idle.0, idle.1, idle.2, busy.0, busy.1, busy.2))
 }
 
+/// Draw time while the takeover banner + red glitch run vs. the same view
+/// without it (alertSessions: banner from frame 150 to 270, bursts in
+/// 150..<174 and 261..<270).
+func alertTimingCheck() throws {
+    let clock = Clock()
+    let env = makeWorld(Scenario(name: "timing-alert", configJSON: #"{ "codenameSalt": "harness-demo" }"#,
+                                 sessions: alertSessions), clock: clock)
+    let hub = PollerHub(tickInterval: 0.01)
+    guard let view = MatrixView(frame: NSRect(origin: .zero, size: size), isPreview: false,
+                                environment: env, pollerHub: hub) else { throw NSError(domain: "harness", code: 1) }
+    view.displayRoleOverride = true
+    let (_, ctx) = try makeContext()
+    NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = ctx
+    var plain: [Double] = [], glitch: [Double] = [], burst: [Double] = []
+    for i in 0..<420 {
+        view.animateOneFrame()
+        if i == 0 { _ = waitFor { clock.vitalsFetches > 0 } }
+        let t = DispatchTime.now().uptimeNanoseconds
+        view.draw(view.bounds)
+        let ms = Double(DispatchTime.now().uptimeNanoseconds - t) / 1e6
+        switch i {
+        case 150..<174, 262..<270: burst.append(ms); glitch.append(ms)
+        case 150..<270: glitch.append(ms)
+        case 50..<145, 280...: plain.append(ms)
+        default: break
+        }
+        clock.advance(1.0 / 30.0)
+        if i % 30 == 0 { Thread.sleep(forTimeInterval: 0.005) }   // let the poller re-read sessions
+    }
+    NSGraphicsContext.restoreGraphicsState()
+    view.stopAnimation()
+    func stats(_ a: [Double]) -> String {
+        let s = a.sorted()
+        return String(format: "p50=%.2f p99=%.2f max=%.2f n=%d", s[s.count / 2], s[min(s.count - 1, Int(Double(s.count) * 0.99))], s.last!, s.count)
+    }
+    print("alert frame time (ms): no banner \(stats(plain)) | banner \(stats(glitch)) | burst \(stats(burst))")
+}
+
 /// REAL_HOME=1: render once against the live environment (real home, real
 /// clock, real liveness), read-only. For a local check only: the screenshot
 /// shows real totals and salted codenames, never folder or repo names.
@@ -296,4 +358,7 @@ for s in scenarios {
     print("wrote \(path)")
 }
 try autoreleasepool { try sharedPollerCheck() }
-if ProcessInfo.processInfo.environment["TIMING"] == "1" { try autoreleasepool { try frameTimeCheck() } }
+if ProcessInfo.processInfo.environment["TIMING"] == "1" {
+    try autoreleasepool { try frameTimeCheck() }
+    try autoreleasepool { try alertTimingCheck() }
+}

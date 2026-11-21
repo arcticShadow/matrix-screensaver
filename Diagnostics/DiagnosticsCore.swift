@@ -32,6 +32,9 @@ final class DiagnosticsCore {
     /// screen height.
     var agentsMaxLines = 40
 
+    /// Takeover-banner clock (see Alerts.swift).
+    private var bannerScheduler = BannerScheduler()
+
     private let mode: PollingMode
     private var manualEngine: PollEngine?
     private var lease: PollerLease?
@@ -105,13 +108,28 @@ final class DiagnosticsCore {
     /// Panels with their screen placement (the one place corners are decided).
     func layout() -> [PlacedPanel] { PanelLayout.place(panels(), now: env.now()) }
 
+    /// The centre takeover banner to show this frame, if any. Stateful (it
+    /// advances the banner cycle): call once per frame. Nil when the overlay is off.
+    func banner() -> AlertBanner? {
+        guard overlayEnabled else { return nil }
+        let now = env.now()
+        let candidates = AttentionAlerts.candidates(agentsInputs(snapshot(), now))
+        return bannerScheduler.update(now: now, candidates: candidates)
+    }
+
     private func agentsPanel(_ snap: DiagSnapshot, _ now: Date) -> Panel {
+        AgentsPanel.build(agentsInputs(snap, now))
+    }
+
+    /// The one place the AGENTS inputs are assembled, shared by the panel and
+    /// the banner so both use the same naming and exclusions.
+    private func agentsInputs(_ snap: DiagSnapshot, _ now: Date) -> AgentsInputs {
         let sec = section(snap.sessions, SourceIDs.sessions, snap, now)
         let failing = (snap.schedules[SourceIDs.sessions]?.consecutiveFailures ?? 0) > 0
-        return AgentsPanel.build(AgentsInputs(now: now, scan: sec.value, signalLost: failing,
-                                              staleMarker: sec.staleMarker, namer: namer,
-                                              profileTags: config.profileTags,
-                                              maxLines: agentsMaxLines))
+        return AgentsInputs(now: now, scan: sec.value, signalLost: failing,
+                            staleMarker: sec.staleMarker, namer: namer,
+                            profileTags: config.profileTags,
+                            maxLines: agentsMaxLines)
     }
 
     private func section<T>(_ sample: Sample<T>?, _ id: SourceID,
