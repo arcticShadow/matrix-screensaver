@@ -31,6 +31,8 @@ final class DiagnosticsCore {
     /// AGENTS panel height budget in lines; the renderer sets it from the
     /// screen height.
     var agentsMaxLines = 40
+    /// Burn-in rotation of the panel corners (the saver sets its `Cfg` interval).
+    var rotation = PanelRotation()
 
     /// Takeover-banner clock (see Alerts.swift).
     private var bannerScheduler = BannerScheduler()
@@ -96,6 +98,7 @@ final class DiagnosticsCore {
                             saverStart: saverStart, timeZone: env.timeZone())
         inp.vitals = section(snap.vitals, SourceIDs.vitals, snap, now)
         inp.power = section(snap.power, SourceIDs.power, snap, now)
+        inp.usage = UsageBlock.lines(snap.collector?.value, config: config, now: now)
         inp.flavour = Flavour.lines(now: now)
         if showDebug {
             inp.debug = PollSources.order.compactMap { id in
@@ -106,7 +109,14 @@ final class DiagnosticsCore {
     }
 
     /// Panels with their screen placement (the one place corners are decided).
-    func layout() -> [PlacedPanel] { PanelLayout.place(panels(), now: env.now()) }
+    /// `agentsLineCapacity` gives the AGENTS line budget for a corner (the
+    /// renderer knows the screen and the logo); it is asked for the corner
+    /// AGENTS occupies right now, so the roster cap follows the rotation.
+    func layout(agentsLineCapacity: ((PanelCorner) -> Int)? = nil) -> [PlacedPanel] {
+        let now = env.now()
+        if let cap = agentsLineCapacity { agentsMaxLines = cap(rotation.agentsCorner(at: now)) }
+        return PanelLayout.place(panels(), now: now, rotation: rotation)
+    }
 
     /// The centre takeover banner to show this frame, if any. Stateful (it
     /// advances the banner cycle): call once per frame. Nil when the overlay is off.
@@ -129,6 +139,7 @@ final class DiagnosticsCore {
         return AgentsInputs(now: now, scan: sec.value, signalLost: failing,
                             staleMarker: sec.staleMarker, namer: namer,
                             profileTags: config.profileTags,
+                            excludedSessionIDs: snap.collector?.value.state?.hiddenSessionIDs ?? [],
                             maxLines: agentsMaxLines)
     }
 

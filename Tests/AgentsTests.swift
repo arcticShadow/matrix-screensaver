@@ -268,8 +268,8 @@ func agentsTests() {
         let w = FakeWorld("agents-cap")
         for i in 1...12 { w.writeSession(FakeSession(pid: Int32(100 + i), cwd: "/r/\(i)", status: "busy")) }
         w.writeSession(FakeSession(pid: 200, cwd: "/r/old", status: "idle", statusAgo: 9999))
-        let p = w.agentsPanel(maxLines: 14)
-        expectEqual(p.lines.count, 14)
+        let p = w.agentsPanel(maxLines: 15)   // 8 totals (incl. BACKGROUND) + ROSTER heading + 6 roster lines
+        expectEqual(p.lines.count, 15)
         let roster = rosterLines(p)
         expectEqual(roster.filter { $0.style == .field }.count, 5)
         expectEqual(roster[5], .text("+7 more", .dim))
@@ -347,7 +347,7 @@ func agentsTests() {
         core.pollNow()
         let placed = core.layout()
         expectEqual(placed.map(\.panel.title), ["SYS", "AGENTS"])
-        expectEqual(placed.map(\.corner), [.topLeft, .bottomRight])
+        expectEqual(placed[1].corner, placed[0].corner.opposite)
         expect(placed[1].columns >= placed[0].columns, "AGENTS rows need at least SYS width")
     }
 

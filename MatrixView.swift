@@ -58,6 +58,10 @@ final class MatrixView: ScreenSaverView {
         static let glitchTailBurst: Double  = 0.3    // ...and at its end
         static let glitchBands:     Int     = 6      // displaced rain slices per burst frame
         static let glitchShift:     CGFloat = 70     // max horizontal slice displacement, points
+        // Burn-in protection: seconds before both panels step one corner clockwise.
+        static let panelRotationInterval: TimeInterval = 600
+        // Minimum gap kept between a panel and the logo's glyph cells, points.
+        static let logoClearance:   CGFloat = 16
         // Hidden debug lines: per-source fetch time and effective poll interval.
         // (Always on in SM_FRAME_DUMP real-host verification builds.)
         #if SM_FRAME_DUMP
@@ -146,6 +150,10 @@ final class MatrixView: ScreenSaverView {
     private var alertFrame = 0
     /// Test/harness hook: force the main-display decision (nil = detect).
     var displayRoleOverride: Bool?
+    /// Seconds per panel corner (harness hook: shorten to watch the rotation).
+    var panelRotationInterval: TimeInterval = Cfg.panelRotationInterval
+    /// AGENTS line budget per corner (logo-aware); rebuilt with the logo mask.
+    private var agentsCapacity: [PanelCorner: Int] = [:]
     private static let log = Logger(subsystem: "law.jude.SolarizedMatrix", category: "overlay")
 
     // Cached draw attributes. A font lookup plus an attributes dictionary per
@@ -226,6 +234,7 @@ final class MatrixView: ScreenSaverView {
 
         buffer  = makeBuffer()
         buildLogoMask(bw: bounds.width, bh: bounds.height)
+        agentsCapacity = [:]
         decideOverlay()
         didInit = true
     }
@@ -274,6 +283,7 @@ final class MatrixView: ScreenSaverView {
         colChar      = []; colHead     = []; colResetAt   = []
         colBodyAttrs = []; colHeadAttrs = []; colAlertAttrs = []
         logoMask     = []; logoDrops   = []; logoColChar  = []
+        agentsCapacity = [:]
         panelRenderer = nil; overlayActive = false; alertFrame = 0
         if diagnostics?.isPolling == true {
             diagnostics?.stopPolling()   // last view out stops the shared poller
@@ -497,8 +507,9 @@ final class MatrixView: ScreenSaverView {
         // Step 4: diagnostic overlay, straight into the screen context (never
         // the fading buffer) so it stays crisp. Panel models are rebuilt every
         // frame so the clock ticks.
-        // Corners and widths come from the core's layout; the AGENTS roster is
-        // capped to the lines that fit the screen height.
+        // Corners (rotating clockwise for burn-in) and widths come from the
+        // core's layout; the AGENTS roster is capped to the lines that fit its
+        // current corner without reaching the logo.
         //
         // Attention alerts: the slice glitch goes on the screen ctx (never the
         // buffer, so displaced slices don't smear into the trails), under the
@@ -508,8 +519,11 @@ final class MatrixView: ScreenSaverView {
             if let banner, inBurst(banner), let img { drawGlitch(screenCtx, rain: img) }
             let t = Double(alertFrame) * animationTimeInterval / Cfg.pulsePeriod
             let pulse = CGFloat(0.5 - 0.5 * cos(2 * Double.pi * t))
-            core.agentsMaxLines = renderer.lineCapacity(height: bounds.height - 2 * Cfg.overlayMargin)
-            for placed in core.layout() {
+            core.rotation = PanelRotation(interval: panelRotationInterval)
+            let placedPanels = core.layout { [unowned self] corner in
+                self.agentsLineCapacity(at: corner, renderer: renderer)
+            }
+            for placed in placedPanels {
                 renderer.draw(placed, in: bounds, margin: Cfg.overlayMargin, pulse: pulse)
             }
             if let banner {
@@ -545,6 +559,39 @@ final class MatrixView: ScreenSaverView {
             ctx.fill(band)
             ctx.restoreGState()
         }
+    }
+
+    /// Lines the AGENTS panel may use when anchored at `corner`: the panel
+    /// grows vertically from its corner until it would come within
+    /// `Cfg.logoClearance` of a logo-mask cell in the columns it spans (or the
+    /// opposite margin when no logo cell is in its way). Cached per corner;
+    /// the mask and bounds only change in setup().
+    private func agentsLineCapacity(at corner: PanelCorner, renderer: PanelRenderer) -> Int {
+        if let c = agentsCapacity[corner] { return c }
+        let bw = bounds.width, bh = bounds.height, m = Cfg.overlayMargin, gap = Cfg.logoClearance
+        let width = renderer.size(of: Panel(title: "AGENTS", lines: []), columns: PanelLayout.agentsColumns).width
+        let x0 = corner.isLeft ? m : bw - m - width
+        let x1 = x0 + width
+        var rowsHit: [Int] = []
+        for i in 0..<min(cols, logoMask.count) {
+            let cx0 = CGFloat(i) * Cfg.fontSize, cx1 = cx0 + Cfg.fontSize
+            guard cx1 > x0 - gap, cx0 < x1 + gap else { continue }
+            if let r = corner.isTop ? logoMask[i].firstIndex(of: true) : logoMask[i].lastIndex(of: true) {
+                rowsHit.append(r)
+            }
+        }
+        // Rows count from the top of the screen (row r spans r*fs ..< (r+1)*fs).
+        let height: CGFloat
+        if corner.isTop, let r = rowsHit.min() {
+            height = CGFloat(r) * Cfg.fontSize - gap - m
+        } else if !corner.isTop, let r = rowsHit.max() {
+            height = bh - CGFloat(r + 1) * Cfg.fontSize - gap - m
+        } else {
+            height = bh - 2 * m
+        }
+        let cap = renderer.lineCapacity(height: height)
+        agentsCapacity[corner] = cap
+        return cap
     }
 
     /// Build the `[col][row]` mask of which glyph cells fall inside the logo

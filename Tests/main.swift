@@ -4,10 +4,16 @@
 //
 
 configTests()
+configInitTests()
 sysPanelTests()
 coreTests()
 pollerTests()
 hubTests()
 agentsTests()
 alertsTests()
+layoutTests()
+backgroundTests()
+collectorTests()
+usagePanelTests()
+refreshTests()
 TestKit.finish()

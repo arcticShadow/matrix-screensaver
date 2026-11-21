@@ -9,6 +9,9 @@
 //  fake home in `makeWorld` and new scenarios below.
 //
 //  Usage: SnapshotHarness [outDir] [frames]
+//  SM_COLLECTOR_STATE=<path>: also render `overlay-real-usage` from a real
+//  collector state file (copied into the fake home; clock = real now). Local
+//  verification only: the PNG shows real usage numbers by profile tag.
 //
 
 import AppKit
@@ -26,7 +29,8 @@ let t0 = Date(timeIntervalSince1970: 1_795_271_405)
 /// and calls the readers on its background queue.
 final class Clock {
     private let lock = NSLock()
-    private var t = t0
+    private var t: Date
+    init(start: Date = t0) { t = start }
     private var fetches = 0
     var now: Date { lock.lock(); defer { lock.unlock() }; return t }
     func advance(_ s: TimeInterval) { lock.lock(); t = t.addingTimeInterval(s); lock.unlock() }
@@ -50,6 +54,34 @@ struct Scenario {
     var sessions: [HarnessSession] = []
     /// Frames to render (nil = the command-line count).
     var frames: Int? = nil
+    /// Collector state file written into the fake home (nil = none: COLLECTOR OFFLINE).
+    var collector: CollectorState? = nil
+    /// Clock start (default t0).
+    var start: Date = t0
+}
+
+/// A fake collector state at t0: two healthy accounts (one near its limits,
+/// with extra usage), one with an expired token, one without a token.
+func fakeUsageState() -> CollectorState {
+    func acct(_ dir: String, _ five: Double, _ seven: Double, token: AccountUsage.TokenState = .ok,
+              ago: TimeInterval = 40, extra: ExtraUsage? = nil) -> AccountUsage {
+        AccountUsage(dir: dir, token: token, tokenExpiresAt: t0.addingTimeInterval(3600),
+                     generatedAt: t0.addingTimeInterval(-ago),
+                     fiveHour: UsageWindow(utilization: five, resetsAt: t0.addingTimeInterval(2 * 3600 + 14 * 60)),
+                     sevenDay: UsageWindow(utilization: seven, resetsAt: t0.addingTimeInterval(4 * 86400 + 3 * 3600)),
+                     extra: extra)
+    }
+    var sched = SourceSchedule(baseInterval: 300)
+    sched.recordSuccess(at: t0.addingTimeInterval(-40), duration: 1.4)
+    return CollectorState(generatedAt: t0.addingTimeInterval(-40),
+                          schedules: [CollectorSourceIDs.usage: sched],
+                          usage: UsageSection(generatedAt: t0.addingTimeInterval(-40), accounts: [
+                            acct(".claude", 37, 12),
+                            acct(".claude-alpha", 78, 91, extra: ExtraUsage(enabled: true, usedMinor: 1240,
+                                 limitMinor: nil, currency: "NZD", decimalPlaces: 2)),
+                            acct(".claude-beta", 64, 30, token: .expired, ago: 3 * 3600),
+                            AccountUsage(dir: ".claude-gamma", token: .none),
+                          ]))
 }
 
 /// One fake session file (neutral names and paths only).
@@ -65,17 +97,21 @@ struct HarnessSession {
     var ago: TimeInterval
     /// false = GHOST (the fake liveness checker reports it dead).
     var alive = true
+    /// Running subagents (fresh, unfinished meta files under projects/).
+    var subagents = 0
+    /// A running background job attributed to this session.
+    var job = false
 }
 
 /// A busy mixed workload: every state, several config dirs, CLI and desktop.
 let demoSessions: [HarnessSession] = {
     var s: [HarnessSession] = [
         .init(pid: 4101, cwd: "/home/demo/code/alpha", status: "waiting",
-              waitingFor: "approve Bash: make deploy", ago: 95),
+              waitingFor: "approve Bash: make deploy", ago: 95, subagents: 1),
         .init(dir: ".claude-alpha", pid: 4102, cwd: "/home/demo/code/beta", status: "waiting",
               waitingFor: "input needed", entrypoint: "claude-desktop", ago: 20),
-        .init(pid: 4103, cwd: "/home/demo/code/gamma", status: "busy", ago: 640),
-        .init(dir: ".claude-beta", pid: 4104, cwd: "/home/demo/code/delta", status: "busy", ago: 75),
+        .init(pid: 4103, cwd: "/home/demo/code/gamma", status: "busy", ago: 640, subagents: 3, job: true),
+        .init(dir: ".claude-beta", pid: 4104, cwd: "/home/demo/code/delta", status: "busy", ago: 75, subagents: 2),
         .init(pid: 4105, cwd: "/home/demo/code/alpha/.claude/worktrees/w1", status: "shell", ago: 12),
         .init(dir: ".claude-alpha", pid: 4106, cwd: "/home/demo/code/epsilon", status: "idle",
               entrypoint: "claude-desktop", ago: 180),
@@ -123,7 +159,16 @@ let scenarios = [
              sessions: alertSessions, frames: 210),
     Scenario(name: "alert-after", configJSON: #"{ "codenameSalt": "harness-demo" }"#,
              sessions: alertSessions, frames: 300),
-]
+    Scenario(name: "overlay-usage", collector: fakeUsageState()),
+] + realUsageScenario()
+
+func realUsageScenario() -> [Scenario] {
+    guard let path = ProcessInfo.processInfo.environment["SM_COLLECTOR_STATE"] else { return [] }
+    guard let st = try? CollectorStateStore.load(path: path) else {
+        print("SM_COLLECTOR_STATE: cannot read state file"); return []
+    }
+    return [Scenario(name: "overlay-real-usage", collector: st, start: Date())]
+}
 
 func makeWorld(_ s: Scenario, clock: Clock) -> DiagnosticsEnvironment {
     let home = "\(outDir)/home-\(s.name)"
@@ -134,6 +179,9 @@ func makeWorld(_ s: Scenario, clock: Clock) -> DiagnosticsEnvironment {
         try? FileManager.default.createDirectory(atPath: (cfg as NSString).deletingLastPathComponent,
                                                  withIntermediateDirectories: true)
         try? json.write(toFile: cfg, atomically: true, encoding: .utf8)
+    }
+    if let st = s.collector, let data = try? CollectorStateStore.encode(st) {
+        try? AtomicFileForHarness.write(data, CollectorStateStore.defaultPath(home: home))
     }
     for f in s.sessions {
         let ms = { (d: Date) in Int64(d.timeIntervalSince1970 * 1000) }
@@ -148,6 +196,20 @@ func makeWorld(_ s: Scenario, clock: Clock) -> DiagnosticsEnvironment {
         let body = s.name == "agents-signal-lost" ? Data("{truncated".utf8)
                                                    : (try? JSONSerialization.data(withJSONObject: obj)) ?? Data()
         FileManager.default.createFile(atPath: "\(dir)/\(f.pid).json", contents: body)
+        let sub = "\(home)/\(f.dir)/projects/\(ProjectDirName.from(cwd: f.cwd))/s-\(f.pid)/subagents"
+        for i in 0..<f.subagents {
+            try? FileManager.default.createDirectory(atPath: sub, withIntermediateDirectories: true)
+            FileManager.default.createFile(atPath: "\(sub)/agent-a\(i).meta.json",
+                                           contents: Data(#"{"agentType":"general-purpose"}"#.utf8))
+            FileManager.default.createFile(atPath: "\(sub)/agent-a\(i).jsonl", contents: Data("{}".utf8),
+                                           attributes: [.modificationDate: t0.addingTimeInterval(-20)])
+        }
+        if f.job {
+            let job = "\(home)/\(f.dir)/jobs/\(String(format: "%08x", f.pid))"
+            try? FileManager.default.createDirectory(atPath: job, withIntermediateDirectories: true)
+            FileManager.default.createFile(atPath: "\(job)/state.json",
+                                           contents: Data(#"{"state":"working","sessionId":"s-\#(f.pid)"}"#.utf8))
+        }
     }
     let dead = Set(s.sessions.filter { !$0.alive }.map(\.pid))
     let thermal = s.thermal, power = s.power, failAfterFirst = s.vitalsFailAfterFirst
@@ -175,7 +237,7 @@ func waitFor(_ timeout: TimeInterval = 2, _ cond: () -> Bool) -> Bool {
     return cond()
 }
 
-func makeContext() throws -> (NSBitmapImageRep, NSGraphicsContext) {
+func makeContext(_ size: NSSize = size) throws -> (NSBitmapImageRep, NSGraphicsContext) {
     guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil,
                                      pixelsWide: Int(size.width * scale),
                                      pixelsHigh: Int(size.height * scale),
@@ -190,7 +252,7 @@ func makeContext() throws -> (NSBitmapImageRep, NSGraphicsContext) {
 }
 
 func render(_ s: Scenario) throws -> String {
-    let clock = Clock()
+    let clock = Clock(start: s.start)
     let env = makeWorld(s, clock: clock)
     let hub = PollerHub(tickInterval: 0.01)
     guard let view = MatrixView(frame: NSRect(origin: .zero, size: size),
@@ -326,6 +388,49 @@ func alertTimingCheck() throws {
     print("alert frame time (ms): no banner \(stats(plain)) | banner \(stats(glitch)) | burst \(stats(burst))")
 }
 
+/// Burn-in rotation with a shortened interval (5 s per corner): one PNG per
+/// position, rotation-<label>-<step>-sys-<corner>.png, with the busy AGENTS
+/// roster so the per-corner height cap and logo clearance are visible.
+func renderRotation(_ size: NSSize, label: String) throws {
+    let interval: TimeInterval = 5
+    let clock = Clock()
+    let s = Scenario(name: "rotation", configJSON: #"{ "codenameSalt": "harness-demo" }"#, sessions: demoSessions)
+    let env = makeWorld(s, clock: clock)
+    let hub = PollerHub(tickInterval: 0.01)
+    guard let view = MatrixView(frame: NSRect(origin: .zero, size: size), isPreview: false,
+                                environment: env, pollerHub: hub) else { throw NSError(domain: "harness", code: 1) }
+    view.displayRoleOverride = true
+    view.panelRotationInterval = interval
+    // Start at the beginning of a rotation cycle (step 0).
+    let cycle = 4 * interval
+    clock.advance(cycle - clock.now.timeIntervalSince1970.truncatingRemainder(dividingBy: cycle))
+    let (_, ctx) = try makeContext(size)
+    NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = ctx
+    let perStep = max(1, frames / 2)
+    let step = (interval - 0.1) / Double(perStep)   // stay inside the interval while the rain fills
+    for k in 0..<4 {
+        for i in 0..<perStep {
+            view.animateOneFrame()
+            if i == 0, k == 0 { _ = waitFor { clock.vitalsFetches > 0 }; Thread.sleep(forTimeInterval: 0.05) }
+            view.draw(view.bounds)
+            clock.advance(step)
+        }
+        let corner = PanelRotation(interval: interval).sysCorner(at: clock.now)
+        let path = "\(outDir)/rotation-\(label)-\(k)-sys-\(corner).png"
+        // Snapshot the live context (the rep's PNG encoding is cached after
+        // the first call, so re-encoding the rep would repeat frame one).
+        ctx.flushGraphics()
+        guard let img = ctx.cgContext.makeImage(),
+              let png = NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:])
+        else { throw NSError(domain: "harness", code: 3) }
+        try png.write(to: URL(fileURLWithPath: path))
+        print("wrote \(path)")
+        clock.advance(0.1)   // cross into the next interval
+    }
+    NSGraphicsContext.restoreGraphicsState()
+    view.stopAnimation()
+}
+
 /// REAL_HOME=1: render once against the live environment (real home, real
 /// clock, real liveness), read-only. For a local check only: the screenshot
 /// shows real totals and salted codenames, never folder or repo names.
@@ -357,8 +462,19 @@ for s in scenarios {
     let path = try autoreleasepool { try render(s) }
     print("wrote \(path)")
 }
+try autoreleasepool { try renderRotation(NSSize(width: 1728, height: 1117), label: "1728x1117") }
+try autoreleasepool { try renderRotation(size, label: "1440x900") }
 try autoreleasepool { try sharedPollerCheck() }
 if ProcessInfo.processInfo.environment["TIMING"] == "1" {
     try autoreleasepool { try frameTimeCheck() }
     try autoreleasepool { try alertTimingCheck() }
+}
+
+
+enum AtomicFileForHarness {
+    static func write(_ data: Data, _ path: String) throws {
+        try FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent,
+                                                withIntermediateDirectories: true)
+        try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+    }
 }
