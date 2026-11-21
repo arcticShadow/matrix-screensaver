@@ -28,8 +28,9 @@ final class DiagnosticsCore {
     let showDebug: Bool
     /// Codename salt holder (salt from config or per-run random); see `namer`.
     private let baseNamer: DisplayNamer
-    /// AGENTS panel height budget in lines; the renderer sets it from the
-    /// screen height.
+    /// AGENTS panel height budget in lines, for the corner AGENTS occupies
+    /// now. `layout(agentsLineCapacity:)` sets it from the renderer's
+    /// per-corner (logo-aware) capacity.
     var agentsMaxLines = 40
     /// Burn-in rotation of the panel corners (the saver sets its `Cfg` interval).
     var rotation = PanelRotation()
