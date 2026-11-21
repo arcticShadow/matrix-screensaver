@@ -15,13 +15,15 @@ private final class SharedFake {
     func advance(_ s: TimeInterval) { lock.lock(); t = t.addingTimeInterval(s); lock.unlock() }
     func countCall() { lock.lock(); calls += 1; lock.unlock() }
 
+    /// Captures `self` strongly: a tick already in flight on the hub queue can finish after the test
+    /// releases its last lease, and must not touch a destroyed fake (that crashed intermittently).
     func env(home: String) -> DiagnosticsEnvironment {
-        DiagnosticsEnvironment(now: { [unowned self] in self.now },
+        DiagnosticsEnvironment(now: { self.now },
                                homeDirectory: home,
                                configPath: ConfigLoader.defaultPath(home: home),
                                bootTime: Date(timeIntervalSince1970: 1_795_000_000),
                                timeZone: { TimeZone(identifier: "UTC")! },
-                               readVitals: { [unowned self] in
+                               readVitals: {
                                    self.countCall()
                                    return HostVitals(load: [1, 2, 3], memoryPressure: .normal, thermal: .fair)
                                },
