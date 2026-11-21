@@ -25,6 +25,7 @@ struct Sample<T: Equatable>: Equatable {
 struct DiagSnapshot: Equatable {
     var vitals: Sample<HostVitals>?
     var power: Sample<PowerStatus>?
+    var sessions: Sample<SessionScan>?
     /// Every registered source's schedule, by id (staleness, debug stats).
     var schedules: [SourceID: SourceSchedule] = [:]
 }
@@ -49,17 +50,21 @@ struct PollSource {
 enum SourceIDs {
     static let vitals: SourceID = "VIT"
     static let power: SourceID = "PWR"
+    static let sessions: SourceID = "SES"
 }
 
 enum PollSources {
     /// Display order of the debug lines (the registry order).
-    static let order: [SourceID] = [SourceIDs.vitals, SourceIDs.power]
+    static let order: [SourceID] = [SourceIDs.vitals, SourceIDs.power, SourceIDs.sessions]
 
     /// The saver's sources, in display order for the debug lines.
     static func standard(_ env: DiagnosticsEnvironment) -> [PollSource] {
         [
             .make(SourceIDs.vitals, every: 5, read: env.readVitals, into: \.vitals),
             .make(SourceIDs.power, every: 60, read: env.readPower, into: \.power),
+            .make(SourceIDs.sessions, every: 2, read: { [home = env.homeDirectory, alive = env.isProcessAlive] in
+                try SessionReader.scan(home: home, isAlive: alive)
+            }, into: \.sessions),
         ]
     }
 }

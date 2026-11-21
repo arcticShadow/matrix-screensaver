@@ -20,6 +20,10 @@
 | `Diagnostics/Poller.swift` | `DiagSnapshot`, the source registry (`PollSources.standard`), `PollEngine` (single-threaded tick), `PollerHub` (the one shared background poller, lease-counted). |
 | `Diagnostics/HostReaders.swift` | `HostVitals` / `PowerStatus` and the live readers (getloadavg, memory-pressure sysctl, thermal state, IOKit power sources). |
 | `Diagnostics/Flavour.swift` | Clock-driven atmosphere lines (scrolling hex, status readout). |
+| `Diagnostics/Sessions.swift` | Session discovery (`~/.claude*` dirs with `sessions/`, canonical `<pid>.json` only), `SessionRecord`, `WaitCategory` (the only part of `waitingFor` kept), `Liveness` (`proc_pidinfo` + UTC `procStart`). |
+| `Diagnostics/AgentsPanel.swift` | `AgentClassifier` (ATTENTION/ACTIVE/AWAITING/DORMANT/GHOST, `AgentsCfg` tunables) and the pure AGENTS panel builder (totals, sorted roster, dormant fold, `+N more`). |
+| `Diagnostics/Naming.swift` | `DisplayNamer` (the one place a session's on-screen name is decided), salted `Codename`, `ProfileTags`. |
+| `Diagnostics/Layout.swift` | `PanelLayout.place`: which corner and width each panel gets (SYS top-left, AGENTS bottom-right). |
 | `Tests/` | Plain `swiftc` test executable (`main.swift` lists suites, `TestKit.swift` assertion helper, one `*Tests.swift` per seam). |
 | `Harness/main.swift` | Offscreen render harness: real MatrixView + fake environment -> PNGs. |
 | `mise.toml` | `build`, `test`, `snapshot`, `install`, `package`, `preview`, `clean` tasks. **Authoritative build commands.** |
@@ -58,7 +62,7 @@ Screen Saver settings moved in macOS 26: **System Settings → Wallpaper → Scr
 1. Fade buffer toward `base03` background by `Cfg.fadeAlpha` (source-over composite) — this produces the glowing trail.
 2. Draw body glyph + head token for each column into the buffer via AppKit text APIs.
 3. Blit the buffer to the screen context via `CGContext.draw(_:in:)`.
-4. Draw the overlay (`DiagnosticsCore.panels()` -> `PanelRenderer`) into the **screen** context, never into the buffer, so it stays crisp.
+4. Draw the overlay (`DiagnosticsCore.layout()` -> `PanelRenderer`) into the **screen** context, never into the buffer, so it stays crisp.
 
 This explicit buffer is necessary because `ScreenSaverView.draw()` does not guarantee backing-store preservation between calls.
 
@@ -68,9 +72,10 @@ This explicit buffer is necessary because `ScreenSaverView.draw()` does not guar
 - Main display = the view's `window.screen` display ID equals `CGMainDisplayID()` (the menu-bar display, `NSScreen.screens.first`). No window/screen yet → main only if there is one screen. The harness forces it via `displayRoleOverride`.
 - Config is loaded once per `DiagnosticsCore`, i.e. once per saver activation (each activation builds a fresh `MatrixView`).
 - Polling: one `PollerHub.shared` per process runs every source on a background queue (utility QoS, 0.25 s tick checks which sources are due) and publishes an immutable `DiagSnapshot`; the render thread only copies it under a lock. A view leases the hub only while its overlay is active (`decideOverlay`) and releases in `teardown()` (so terminal `didstop` and `stopAnimation` both stop it); the first lease starts the timer, the last release cancels it and drops the engine. The engine/readers come from the first lease's environment.
-- Scheduling (`SourceSchedule`): effective interval = `max(base, 20 × last fetch)`; failures back off `base × 2^n` capped at `10 × base`; a section shows a dim `·12s` marker once its data is older than `2 × max(base, 20 × last fetch)` (backoff deliberately excluded, so failing sources show staleness). Bases: vitals 5 s, power 60 s.
+- Scheduling (`SourceSchedule`): effective interval = `max(base, 20 × last fetch)`; failures back off `base × 2^n` capped at `10 × base`; a section shows a dim `·12s` marker once its data is older than `2 × max(base, 20 × last fetch)` (backoff deliberately excluded, so failing sources show staleness). Bases: sessions 2 s, vitals 5 s, power 60 s.
 - Adding a source: see the header comment in `Diagnostics/Poller.swift` (reader in `DiagnosticsEnvironment`, slot in `DiagSnapshot`, one `.make(...)` line in `PollSources.standard` + `order`, its panel lines).
 - Real home comes from `getpwuid(getuid())`; the sandboxed host's `NSHomeDirectory()` is its container. The sandboxed host *can* read `~/.config/matrix-diag/config.json` (verified).
+- AGENTS: session files are read on the poller queue (liveness via `proc_pidinfo` there too); a scan that can't list a sessions dir, or finds session files of which none parse, or a failing sessions source shows `AGENT.LINK SIGNAL LOST`, never zero. Private free text (`name`, `waitingFor` command, cwd, config-dir names) never reaches a `Panel`: names go through `DisplayNamer`, dirs through `ProfileTags`. The renderer sets `agentsMaxLines` from the screen height.
 - Keep the dismissal guarantees: `autoreleasepool` in `draw`, cached attrs (renderer caches its own), terminal `didstop`, `teardown()` releases buffers, the renderer and the poller lease.
 - Real-host check without screen capture (the session is locked while the saver runs): `SM_SWIFT_FLAGS="-D SM_FRAME_DUMP" mise run install` makes the saver write `SolarizedMatrix-frame-<pid>-main-150.png` into its container's `Data/tmp` (`~/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/Data/tmp/`). Reinstall without the flag afterwards. That build also logs `draw ms p50=… p99=… max=… polling=…` every 300 frames and `poller decide/teardown leased=… running=… leases=… starts=…`.
 
@@ -82,8 +87,9 @@ This explicit buffer is necessary because `ScreenSaverView.draw()` does not guar
 | `fallMin` / `fallMax` | `0.4` / `1.2` | Row advance per frame (speed range) |
 | `fadeAlpha` | `0.018` | Trail length — lower = longer, glowier trails |
 | `overlayFontSize` | `15` | Overlay text size (points) |
-| `overlayColumns` | `34` | Overlay panel width in monospace cells |
 | `overlayMargin` | `48` | Overlay inset from the screen edge (points) |
+| `PanelLayout.sysColumns` / `agentsColumns` | `34` / `46` | Panel widths in monospace cells (`Diagnostics/Layout.swift`) |
+| `AgentsCfg.awaitingWindow` | `15 min` | Idle sessions younger than this are AWAITING, older ones DORMANT (`Diagnostics/AgentsPanel.swift`) |
 | `overlayDebug` | `false` | Show per-source fetch time / effective interval lines (`DBG.VIT 1.2ms @5s`, `F2` = failing). On in `SM_FRAME_DUMP` builds. |
 
 ## Glyph sets

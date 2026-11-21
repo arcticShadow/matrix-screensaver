@@ -44,7 +44,6 @@ final class MatrixView: ScreenSaverView {
 
         // Diagnostic overlay (panels drawn over the rain on the main display).
         static let overlayFontSize: CGFloat = 15
-        static let overlayColumns:  Int     = 34     // panel width in monospace cells
         static let overlayMargin:   CGFloat = 48     // inset from the screen edge, points
         // Hidden debug lines: per-source fetch time and effective poll interval.
         // (Always on in SM_FRAME_DUMP real-host verification builds.)
@@ -226,8 +225,7 @@ final class MatrixView: ScreenSaverView {
         let main = isMainDisplay
         overlayActive = !isPreview && main && (diagnostics?.overlayEnabled ?? false)
         if overlayActive, panelRenderer == nil {
-            panelRenderer = PanelRenderer(style: .init(fontSize: Cfg.overlayFontSize,
-                                                       columns: Cfg.overlayColumns))
+            panelRenderer = PanelRenderer(style: .init(fontSize: Cfg.overlayFontSize))
         }
         // Only a view that shows the overlay holds a lease on the shared poller.
         if overlayActive { diagnostics?.startPolling() } else { diagnostics?.stopPolling() }
@@ -450,9 +448,13 @@ final class MatrixView: ScreenSaverView {
         // Step 4: diagnostic overlay, straight into the screen context (never
         // the fading buffer) so it stays crisp. Panel models are rebuilt every
         // frame so the clock ticks.
-        if overlayActive, let core = diagnostics, let renderer = panelRenderer,
-           let sys = core.panels().first {
-            renderer.draw(sys, corner: .topLeft, in: bounds, margin: Cfg.overlayMargin)
+        // Corners and widths come from the core's layout; the AGENTS roster is
+        // capped to the lines that fit the screen height.
+        if overlayActive, let core = diagnostics, let renderer = panelRenderer {
+            core.agentsMaxLines = renderer.lineCapacity(height: bounds.height - 2 * Cfg.overlayMargin)
+            for placed in core.layout() {
+                renderer.draw(placed, in: bounds, margin: Cfg.overlayMargin)
+            }
         }
     }
 

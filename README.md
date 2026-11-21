@@ -45,8 +45,17 @@ average, memory pressure, thermal state), battery level and power source
 (omitted on desktops) and a couple of atmospheric flavour lines. A single
 background poller refreshes each source on its own interval (vitals 5 s,
 battery 60 s), slows itself down if a read is slow or failing, and marks a
-section with a dim `·12s` when its data is getting old. More panels (agents,
-usage) are on the way — see issue #1.
+section with a dim `·12s` when its data is getting old.
+
+In the opposite corner an **AGENTS** panel counts your Claude Code sessions
+across every `~/.claude*` config directory (CLI and Claude Desktop): RUNNING,
+ACTIVE, ATTENTION (blocked on a permission prompt or question, red), AWAITING
+(went idle under 15 minutes ago, amber) and DORMANT. A roster lists the
+sessions that matter, attention first, each under a stable salted codename
+(`IRON-LATTICE`) with a three-letter profile tag; only the category of a
+prompt (`APPROVE BASH`, `INPUT NEEDED`) is ever shown, never the command. If
+the session files can't be parsed it says `AGENT.LINK SIGNAL LOST` rather than
+showing zero. Usage limits and calendar are on the way — see issue #1.
 
 To turn it off without rebuilding, create `~/.config/matrix-diag/config.json`:
 

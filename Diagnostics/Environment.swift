@@ -21,6 +21,8 @@ struct DiagnosticsEnvironment {
     /// queue. Default to the live readers; tests and the harness inject fakes.
     var readVitals: () throws -> HostVitals = HostReaders.vitals
     var readPower: () throws -> PowerStatus = HostReaders.power
+    /// Session-process liveness (proc_pidinfo + procStart). Tests inject fakes.
+    var isProcessAlive: LivenessChecker = Liveness.check
 
     static func live() -> DiagnosticsEnvironment {
         let home = realHomeDirectory()

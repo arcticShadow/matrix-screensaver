@@ -54,12 +54,12 @@ final class FakeWorld {
 }
 
 func coreTests() {
-    test("no config file: overlay on, SYS panel present") {
+    test("no config file: overlay on, SYS and AGENTS panels present") {
         let w = FakeWorld("core-default")
         let core = DiagnosticsCore(env: w.env)
         expect(core.overlayEnabled)
         expectEqual(core.configStatus, .missing)
-        expectEqual(core.panels().map(\.title), ["SYS"])
+        expectEqual(core.panels().map(\.title), ["SYS", "AGENTS"])
     }
 
     test("config overlay:false disables the overlay and yields no panels") {
