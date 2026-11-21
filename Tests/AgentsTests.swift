@@ -268,16 +268,17 @@ func agentsTests() {
         let w = FakeWorld("agents-cap")
         for i in 1...12 { w.writeSession(FakeSession(pid: Int32(100 + i), cwd: "/r/\(i)", status: "busy")) }
         w.writeSession(FakeSession(pid: 200, cwd: "/r/old", status: "idle", statusAgo: 9999))
-        let p = w.agentsPanel(maxLines: 15)   // 8 totals (incl. BACKGROUND) + ROSTER heading + 6 roster lines
+        let p = w.agentsPanel(maxLines: 15)   // 8 totals (incl. BACKGROUND) + ROSTER heading + 7 roster lines
         expectEqual(p.lines.count, 15)
         let roster = rosterLines(p)
-        expectEqual(roster.filter { $0.style == .field }.count, 5)
-        expectEqual(roster[5], .text("+7 more", .dim))
-        expectEqual(roster.last, .text("○ 1 DORMANT across 1 repo", .dim))
-        // Everything fits: no "+N more".
+        // Session rows outrank the dormant summary; `+N more` takes the last line.
+        expectEqual(roster.filter { $0.style == .field }.count, 6)
+        expectEqual(roster.last, .text("+6 more", .dim))
+        // Everything fits: no "+N more", the dormant summary is back.
         let roomy = w.agentsPanel(maxLines: 40)
         expectEqual(rosterRows(roomy).count, 12)
         expect(!roomy.lines.contains { $0.label.hasSuffix("more") })
+        expectEqual(rosterLines(roomy).last, .text("○ 1 DORMANT across 1 repo", .dim))
     }
 
     test("agents: profile tags default per dir and honour config overrides; CLI/DSK tag") {
@@ -351,12 +352,63 @@ func agentsTests() {
         expect(placed[1].columns >= placed[0].columns, "AGENTS rows need at least SYS width")
     }
 
-    test("agents: the line budget never goes below the totals plus one row") {
-        let w = FakeWorld("agents-tiny")
-        for i in 1...5 { w.writeSession(FakeSession(pid: Int32(i), cwd: "/r/\(i)", status: "busy")) }
-        let p = w.agentsPanel(maxLines: 3)
-        expectEqual(p.value(of: "RUNNING"), "5")
-        expectEqual(rosterLines(p).last, .text("+5 more", .dim))
+    test("agents: the panel never exceeds its line budget, at any budget") {
+        let w = FakeWorld("agents-budget")
+        writeMixedRoster(w)
+        for budget in 1...30 {
+            let p = w.agentsPanel(dead: [90], maxLines: budget)
+            expect(p.lines.count <= budget, "budget \(budget): \(p.lines.count) lines")
+        }
+    }
+
+    test("agents: a tight budget keeps full totals while a row and +N more still fit") {
+        let w = FakeWorld("agents-budget-full")
+        writeMixedRoster(w)   // 2 attention, 3 active, 2 awaiting, 3 dormant, 1 ghost
+        let p = w.agentsPanel(dead: [90], maxLines: 12)
+        expectEqual(p.value(of: "ATTENTION"), "2")
+        expectEqual(rosterLines(p).map(\.value), ["APPROVE 5m", "INPUT NEEDED 1m", "ACTIVE 20m", ""])
+        expectEqual(rosterLines(p).last, .text("+4 more", .dim))
+        // All rows fit but not both summaries: dormant summary before ghost.
+        let q = w.agentsPanel(dead: [90], maxLines: 16)
+        expectEqual(rosterRows(q).count, 7)
+        expectEqual(rosterLines(q).last, .text("○ 3 DORMANT across 2 repos", .dim))
+        expectEqual(w.agentsPanel(dead: [90], maxLines: 17).lines.last, .text("✕ 1 GHOST", .dim))
+    }
+
+    test("agents: below the full totals the panel folds totals into one line and keeps rows") {
+        let w = FakeWorld("agents-budget-compact")
+        writeMixedRoster(w)
+        let p = w.agentsPanel(dead: [90], maxLines: 7)
+        expectEqual(p.lines.first, .text("RUN 10 · ATT 2 · ACT 3 · AWT 2 · DOR 3 · BG 0", .alert))
+        expectEqual(p.lines.filter { $0.style == .field }.map(\.value),
+                    ["APPROVE 5m", "INPUT NEEDED 1m", "ACTIVE 20m", "ACTIVE 10m", "ACTIVE 1m"])
+        expectEqual(p.lines.last, .text("+2 more", .dim))
+        // Three lines: totals, the first attention row, +N more.
+        let three = w.agentsPanel(dead: [90], maxLines: 3)
+        expectEqual(three.lines.map(\.value), ["", "APPROVE 5m", ""])
+        expectEqual(three.lines.last, .text("+6 more", .dim))
+        // Two lines: totals and the first attention row.
+        expectEqual(w.agentsPanel(dead: [90], maxLines: 2).lines.map(\.value), ["", "APPROVE 5m"])
+        // One line: the first attention row beats the totals.
+        let one = w.agentsPanel(dead: [90], maxLines: 1)
+        expectEqual(one.lines.count, 1)
+        expectEqual(one.lines.first?.value, "APPROVE 5m")
+        expectEqual(one.lines.first?.severity, .alert)
+    }
+
+    test("agents: compact totals are not red without attention and carry the stale marker's place") {
+        let w = FakeWorld("agents-budget-calm")
+        for i in 1...4 { w.writeSession(FakeSession(pid: Int32(i), cwd: "/r/\(i)", status: "busy", statusAgo: Double(i))) }
+        let p = w.agentsPanel(maxLines: 4)
+        expectEqual(p.lines.first, .text("RUN 4 · ATT 0 · ACT 4 · AWT 0 · DOR 0 · BG 0", .normal))
+        expectEqual(p.lines.count, 4)
+        expectEqual(p.lines.last, .text("+2 more", .dim))
+        // No live rows: totals plus the summary.
+        let idle = FakeWorld("agents-budget-idle")
+        idle.writeSession(FakeSession(pid: 1, cwd: "/r/a", status: "idle", statusAgo: 9999))
+        expectEqual(idle.agentsPanel(maxLines: 2).lines,
+                    [.text("RUN 1 · ATT 0 · ACT 0 · AWT 0 · DOR 1 · BG 0", .normal),
+                     .text("○ 1 DORMANT across 1 repo", .dim)])
     }
 
     test("layout: the widest roster row fits the AGENTS panel width") {
@@ -374,3 +426,19 @@ func agentsTests() {
     }
 }
 
+
+/// 2 attention (oldest first: 5m, 1m), 3 active (20m, 10m, 1m), 2 awaiting,
+/// 3 dormant across 2 repos and one ghost (pid 90, pass `dead: [90]`).
+func writeMixedRoster(_ w: FakeWorld) {
+    w.writeSession(FakeSession(pid: 1, cwd: "/r/a", status: "waiting", waitingFor: "permission prompt", statusAgo: 300))
+    w.writeSession(FakeSession(pid: 2, cwd: "/r/b", status: "waiting", waitingFor: "input needed", statusAgo: 60))
+    w.writeSession(FakeSession(pid: 3, cwd: "/r/c", status: "busy", statusAgo: 1200))
+    w.writeSession(FakeSession(pid: 4, cwd: "/r/d", status: "busy", statusAgo: 600))
+    w.writeSession(FakeSession(pid: 5, cwd: "/r/e", status: "busy", statusAgo: 60))
+    w.writeSession(FakeSession(pid: 6, cwd: "/r/f", status: "idle", statusAgo: 120))
+    w.writeSession(FakeSession(pid: 7, cwd: "/r/g", status: "idle", statusAgo: 240))
+    for (pid, cwd) in [(8, "/r/old"), (9, "/r/old"), (10, "/r/older")] {
+        w.writeSession(FakeSession(pid: Int32(pid), cwd: cwd, status: "idle", statusAgo: 99999))
+    }
+    w.writeSession(FakeSession(pid: 90, cwd: "/r/gone", status: "busy"))
+}
