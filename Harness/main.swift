@@ -50,10 +50,10 @@ struct Scenario {
     var vitalsFailAfterFirst = false
     /// Fake seconds per frame (larger = data ages faster).
     var clockStep: TimeInterval = 1.0 / 30.0
+    /// Fake `~/.claude*` session files written into the scratch home.
+    var sessions: [HarnessSession] = []
     /// Collector state file written into the fake home (nil = none: COLLECTOR OFFLINE).
     var collector: CollectorState? = nil
-    /// Session files to create (config dir basenames), so token-less accounts show.
-    var sessionDirs: [String] = []
     /// Clock start (default t0).
     var start: Date = t0
 }
@@ -82,6 +82,44 @@ func fakeUsageState() -> CollectorState {
                           ]))
 }
 
+/// One fake session file (neutral names and paths only).
+struct HarnessSession {
+    var dir = ".claude"
+    var pid: Int32
+    var cwd: String
+    var status: String
+    var waitingFor: String? = nil
+    var entrypoint = "cli"
+    var kind = "interactive"
+    /// Seconds before t0 that the status last changed.
+    var ago: TimeInterval
+    /// false = GHOST (the fake liveness checker reports it dead).
+    var alive = true
+}
+
+/// A busy mixed workload: every state, several config dirs, CLI and desktop.
+let demoSessions: [HarnessSession] = {
+    var s: [HarnessSession] = [
+        .init(pid: 4101, cwd: "/home/demo/code/alpha", status: "waiting",
+              waitingFor: "approve Bash: make deploy", ago: 95),
+        .init(dir: ".claude-alpha", pid: 4102, cwd: "/home/demo/code/beta", status: "waiting",
+              waitingFor: "input needed", entrypoint: "claude-desktop", ago: 20),
+        .init(pid: 4103, cwd: "/home/demo/code/gamma", status: "busy", ago: 640),
+        .init(dir: ".claude-beta", pid: 4104, cwd: "/home/demo/code/delta", status: "busy", ago: 75),
+        .init(pid: 4105, cwd: "/home/demo/code/alpha/.claude/worktrees/w1", status: "shell", ago: 12),
+        .init(dir: ".claude-alpha", pid: 4106, cwd: "/home/demo/code/epsilon", status: "idle",
+              entrypoint: "claude-desktop", ago: 180),
+        .init(pid: 4107, cwd: "/home/demo/code/zeta", status: "idle", ago: 610),
+        .init(pid: 4108, cwd: "/home/demo/code/eta", status: "busy", ago: 30, alive: false),
+        .init(pid: 4109, cwd: "/home/demo/code/theta", status: "busy", kind: "daemon", ago: 5),
+    ]
+    for i in 0..<14 {
+        s.append(.init(dir: i % 3 == 0 ? ".claude-beta" : ".claude", pid: Int32(4200 + i),
+                       cwd: "/home/demo/code/repo\(i % 6)", status: "idle", ago: Double(3600 * (i + 1))))
+    }
+    return s
+}()
+
 let scenarios = [
     Scenario(name: "overlay"),
     Scenario(name: "overlay-off", configJSON: #"{ "overlay": false }"#),
@@ -91,6 +129,8 @@ let scenarios = [
              thermal: .serious),
     Scenario(name: "overlay-stale", debugLines: true, vitalsFailAfterFirst: true, clockStep: 0.2),
     Scenario(name: "overlay-desktop", power: .noBattery),
+    Scenario(name: "agents", configJSON: #"{ "codenameSalt": "harness-demo" }"#, sessions: demoSessions),
+    Scenario(name: "agents-signal-lost", sessions: [.init(pid: 1, cwd: "/x", status: "busy", ago: 1)]),
     Scenario(name: "overlay-usage", collector: fakeUsageState()),
 ] + realUsageScenario()
 
@@ -115,14 +155,23 @@ func makeWorld(_ s: Scenario, clock: Clock) -> DiagnosticsEnvironment {
     if let st = s.collector, let data = try? CollectorStateStore.encode(st) {
         try? AtomicFileForHarness.write(data, CollectorStateStore.defaultPath(home: home))
     }
-    for d in s.sessionDirs {
-        let p = "\(home)/\(d)/sessions/1.json"
-        try? FileManager.default.createDirectory(atPath: (p as NSString).deletingLastPathComponent,
-                                                 withIntermediateDirectories: true)
-        try? "{}".write(toFile: p, atomically: true, encoding: .utf8)
+    for f in s.sessions {
+        let ms = { (d: Date) in Int64(d.timeIntervalSince1970 * 1000) }
+        var obj: [String: Any] = ["pid": Int(f.pid), "sessionId": "s-\(f.pid)", "cwd": f.cwd,
+                                  "status": f.status, "kind": f.kind, "entrypoint": f.entrypoint,
+                                  "procStart": "Fri Nov 20 19:37:21 2026",
+                                  "statusUpdatedAt": ms(t0.addingTimeInterval(-f.ago)),
+                                  "updatedAt": ms(t0.addingTimeInterval(-f.ago))]
+        if let w = f.waitingFor { obj["waitingFor"] = w }
+        let dir = "\(home)/\(f.dir)/sessions"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let body = s.name == "agents-signal-lost" ? Data("{truncated".utf8)
+                                                   : (try? JSONSerialization.data(withJSONObject: obj)) ?? Data()
+        FileManager.default.createFile(atPath: "\(dir)/\(f.pid).json", contents: body)
     }
+    let dead = Set(s.sessions.filter { !$0.alive }.map(\.pid))
     let thermal = s.thermal, power = s.power, failAfterFirst = s.vitalsFailAfterFirst
-    return DiagnosticsEnvironment(now: { clock.now },
+    var env = DiagnosticsEnvironment(now: { clock.now },
                                   homeDirectory: home,
                                   configPath: cfg,
                                   bootTime: t0.addingTimeInterval(-(4 * 86400 + 3 * 3600 + 12 * 60)),
@@ -135,6 +184,8 @@ func makeWorld(_ s: Scenario, clock: Clock) -> DiagnosticsEnvironment {
                                                         thermal: thermal)
                                   },
                                   readPower: { power })
+    env.isProcessAlive = { pid, _ in !dead.contains(pid) }
+    return env
 }
 
 /// Wait (real time) for the background poller to catch up.
@@ -257,7 +308,33 @@ func frameTimeCheck() throws {
                  idle.0, idle.1, idle.2, busy.0, busy.1, busy.2))
 }
 
+/// REAL_HOME=1: render once against the live environment (real home, real
+/// clock, real liveness), read-only. For a local check only: the screenshot
+/// shows real totals and salted codenames, never folder or repo names.
+func renderRealHome() throws {
+    let hub = PollerHub(tickInterval: 0.05)
+    guard let view = MatrixView(frame: NSRect(origin: .zero, size: size), isPreview: false,
+                                environment: .live(), pollerHub: hub) else { throw NSError(domain: "harness", code: 1) }
+    view.displayRoleOverride = true
+    let (rep, ctx) = try makeContext()
+    NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = ctx
+    for i in 0..<frames {
+        view.animateOneFrame()
+        if i == 0 { Thread.sleep(forTimeInterval: 0.5) }   // let the first real fetches land
+        view.draw(view.bounds)
+    }
+    NSGraphicsContext.restoreGraphicsState()
+    view.stopAnimation()
+    let path = "\(outDir)/agents-real.png"
+    try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+    print("wrote \(path)")
+}
+
 try FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
+if ProcessInfo.processInfo.environment["REAL_HOME"] == "1" {
+    try autoreleasepool { try renderRealHome() }
+    exit(0)
+}
 for s in scenarios {
     let path = try autoreleasepool { try render(s) }
     print("wrote \(path)")

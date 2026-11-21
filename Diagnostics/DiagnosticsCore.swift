@@ -26,6 +26,11 @@ final class DiagnosticsCore {
     let saverStart: Date
     /// Show the per-source fetch-time debug lines.
     let showDebug: Bool
+    /// Display names (codenames; salt from config or per-run random).
+    let namer: DisplayNamer
+    /// AGENTS panel height budget in lines; the renderer sets it from the
+    /// screen height.
+    var agentsMaxLines = 40
 
     private let mode: PollingMode
     private var manualEngine: PollEngine?
@@ -37,6 +42,7 @@ final class DiagnosticsCore {
         config = loaded.config
         configStatus = loaded.status
         saverStart = env.now()
+        namer = DisplayNamer(salt: loaded.config.codenameSalt)
         self.showDebug = showDebug
         mode = polling
         if case .manual = polling {
@@ -94,7 +100,19 @@ final class DiagnosticsCore {
                 snap.schedules[id].map { SourceStat(id: id, schedule: $0) }
             }
         }
-        return [SysPanel.build(inp)]
+        return [SysPanel.build(inp), agentsPanel(snap, now)]
+    }
+
+    /// Panels with their screen placement (the one place corners are decided).
+    func layout() -> [PlacedPanel] { PanelLayout.place(panels(), now: env.now()) }
+
+    private func agentsPanel(_ snap: DiagSnapshot, _ now: Date) -> Panel {
+        let sec = section(snap.sessions, SourceIDs.sessions, snap, now)
+        let failing = (snap.schedules[SourceIDs.sessions]?.consecutiveFailures ?? 0) > 0
+        return AgentsPanel.build(AgentsInputs(now: now, scan: sec.value, signalLost: failing,
+                                              staleMarker: sec.staleMarker, namer: namer,
+                                              profileTags: config.profileTags,
+                                              maxLines: agentsMaxLines))
     }
 
     private func section<T>(_ sample: Sample<T>?, _ id: SourceID,

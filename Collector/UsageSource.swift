@@ -135,7 +135,7 @@ struct UsageSource: CollectorSource {
 
     /// State changes only, by profile tag (never folder or service names).
     private func logChange(before: AccountUsage?, after: AccountUsage, ctx: CollectorContext) {
-        let tag = ProfileTag.tag(forDir: after.dir, config: ctx.config)
+        let tag = ProfileTags.tag(configDir: after.dir, overrides: ctx.config.profileTags)
         if before?.token != after.token {
             ctx.log.change("\(tag) token \(after.token.rawValue)")
         }

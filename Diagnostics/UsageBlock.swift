@@ -69,7 +69,7 @@ enum UsageBlock {
         }
         if shown.isEmpty { out.append(.text("NO ACCOUNTS", .dim)) }
         for a in shown {
-            let tag = ProfileTag.tag(forDir: a.dir, config: config)
+            let tag = ProfileTags.tag(configDir: a.dir, overrides: config.profileTags)
             if a.token == .none {
                 out.append(.field("\(tag).TOKEN", "NO TOKEN", .dim))
                 continue

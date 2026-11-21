@@ -10,15 +10,10 @@
 
 import AppKit
 
-/// Screen corner a panel is anchored to.
-enum PanelCorner { case topLeft, topRight, bottomRight, bottomLeft }
-
 final class PanelRenderer {
 
     struct Style {
         var fontSize: CGFloat
-        /// Panel width in monospace character cells.
-        var columns: Int
         /// Inner padding in character cells (horizontal) / rows (vertical, fractional).
         var padCols: CGFloat = 1.5
         var padRows: CGFloat = 0.6
@@ -75,15 +70,22 @@ final class PanelRenderer {
         ]
     }
 
-    func size(of panel: Panel) -> CGSize {
-        CGSize(width: CGFloat(style.columns) * cellW + 2 * style.padCols * cellW,
+    func size(of panel: Panel, columns: Int) -> CGSize {
+        CGSize(width: CGFloat(columns) * cellW + 2 * style.padCols * cellW,
                height: CGFloat(panel.lines.count + 1) * rowH + 2 * style.padRows * rowH)
     }
 
-    /// Draw `panel` anchored to `corner` of `bounds`, inset by `margin` points.
-    /// Must be called with the target as the current NSGraphicsContext.
-    func draw(_ panel: Panel, corner: PanelCorner, in bounds: CGRect, margin: CGFloat) {
-        let sz = size(of: panel)
+    /// How many panel lines (title bar excluded) fit in `height` points.
+    func lineCapacity(height: CGFloat) -> Int {
+        max(0, Int((height - 2 * style.padRows * rowH) / rowH) - 1)
+    }
+
+    /// Draw a placed panel (corner + width decided by the core's PanelLayout)
+    /// in `bounds`, inset by `margin` points. Must be called with the target as
+    /// the current NSGraphicsContext.
+    func draw(_ placed: PlacedPanel, in bounds: CGRect, margin: CGFloat) {
+        let panel = placed.panel, corner = placed.corner, columns = placed.columns
+        let sz = size(of: panel, columns: columns)
         let x: CGFloat, y: CGFloat
         switch corner {
         case .topLeft:     x = bounds.minX + margin;            y = bounds.maxY - margin - sz.height
@@ -91,10 +93,10 @@ final class PanelRenderer {
         case .bottomRight: x = bounds.maxX - margin - sz.width; y = bounds.minY + margin
         case .bottomLeft:  x = bounds.minX + margin;            y = bounds.minY + margin
         }
-        draw(panel, in: CGRect(origin: CGPoint(x: x, y: y), size: sz))
+        draw(panel, columns: columns, in: CGRect(origin: CGPoint(x: x, y: y), size: sz))
     }
 
-    private func draw(_ panel: Panel, in box: CGRect) {
+    private func draw(_ panel: Panel, columns: Int, in box: CGRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         let box = box.integral
 
@@ -115,7 +117,7 @@ final class PanelRenderer {
         ctx.strokePath()
 
         let left = box.minX + style.padCols * cellW
-        let width = CGFloat(style.columns) * cellW
+        let width = CGFloat(columns) * cellW
         var top = box.maxY - style.padRows * rowH
 
         // Title bar: ▓▒░ SYS ░▒▓ ──────  then a rule under it.
@@ -133,20 +135,19 @@ final class PanelRenderer {
             case .section:
                 ("── " + line.label + " ──" as NSString).draw(at: p, withAttributes: sectionAttrs)
                 if !line.value.isEmpty {   // e.g. the staleness marker `·12s`, dim, right-aligned
-                    let x = p.x + CGFloat(style.columns - line.value.count) * cellW
+                    let x = p.x + CGFloat(columns - line.value.count) * cellW
                     (line.value as NSString).draw(at: CGPoint(x: x, y: p.y), withAttributes: dotAttrs)
                 }
             case .text:
                 (line.label as NSString).draw(at: p, withAttributes: valueAttrs[line.severity] ?? labelAttrs)
             case .field:
-                drawField(line, at: p)
+                drawField(line, columns: columns, at: p)
             }
         }
     }
 
     /// `LABEL ······ value`, value right-aligned to the panel's column count.
-    private func drawField(_ line: PanelLine, at p: CGPoint) {
-        let cols = style.columns
+    private func drawField(_ line: PanelLine, columns cols: Int, at p: CGPoint) {
         let value = String(line.value.prefix(max(0, cols - line.label.count - 2)))
         let dots = max(1, cols - line.label.count - value.count - 2)
         (line.label as NSString).draw(at: p, withAttributes: labelAttrs)

@@ -21,6 +21,9 @@ struct DiagnosticsEnvironment {
     /// queue. Default to the live readers; tests and the harness inject fakes.
     var readVitals: () throws -> HostVitals = HostReaders.vitals
     var readPower: () throws -> PowerStatus = HostReaders.power
+    /// Session-process liveness (proc_pidinfo + procStart). Tests inject fakes.
+    var isProcessAlive: LivenessChecker = Liveness.check
+
     /// The collector state file reader: always the file under `homeDirectory`
     /// (tests and the harness write a state file into their fake home).
     var readCollector: () throws -> CollectorReading {
