@@ -70,7 +70,9 @@ let ctx = CollectorContext(now: Date.init,
                            claudePath: BinaryResolver.resolve("claude", home: home, path: envPath),
                            runProcess: LiveProcess.run,
                            newSessionID: { UUID().uuidString.lowercased() },
-                           sleep: { Thread.sleep(forTimeInterval: $0) })
+                           sleep: { Thread.sleep(forTimeInterval: $0) },
+                           gwsPath: BinaryResolver.resolve("gws", home: home, path: envPath),
+                           runAgenda: LiveProcess.capture)
 let report = Collector.run(statePath: statePath, sources: CollectorSources.standard(), ctx: ctx, force: force)
 if logPath == nil { for l in log.lines { FileHandle.standardError.write(Data((l + "\n").utf8)) } }
 exit(report.wrote ? 0 : 1)

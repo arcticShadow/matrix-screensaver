@@ -34,6 +34,16 @@ final class FakeCollector {
     private(set) var stateAtLaunch: [CollectorState?] = []
     private(set) var sleeps: [TimeInterval] = []
     private var sessionCounter = 0
+    /// Sources a run uses. Usage-only by default (the usage tests predate the
+    /// calendar); calendar tests use `CollectorSources.standard()`.
+    var sources: [CollectorSource] = [UsageSource()]
+    /// `gws` (Tests/CalendarTests.swift). nil = not installed.
+    var gwsPath: String? = "/opt/fake/bin/gws"
+    /// The fake agenda runner's answer: exit status + stdout. Never the real gws.
+    var agenda: (status: Int32, stdout: String) = (0, #"{"events":[],"count":0}"#)
+    var agendaTimesOut = false
+    var agendaDuration: TimeInterval = 2
+    private(set) var agendaRuns: [ProcessSpec] = []
 
     struct NetworkError: Error {}
 
@@ -96,7 +106,14 @@ final class FakeCollector {
                 self.sessionCounter += 1
                 return String(format: "00000000-0000-4000-8000-%012d", self.sessionCounter)
             },
-            sleep: { [unowned self] s in self.sleeps.append(s); self.now = self.now.addingTimeInterval(s) })
+            sleep: { [unowned self] s in self.sleeps.append(s); self.now = self.now.addingTimeInterval(s) },
+            gwsPath: gwsPath,
+            runAgenda: { [unowned self] spec in
+                self.agendaRuns.append(spec)
+                self.now = self.now.addingTimeInterval(self.agendaDuration)
+                return ProcessOutput(status: self.agendaTimesOut ? 15 : self.agenda.status,
+                                     timedOut: self.agendaTimesOut, stdout: Data(self.agenda.stdout.utf8))
+            })
     }
 
     /// Config dir basename a refresh process targets (no CLAUDE_CONFIG_DIR = `~/.claude`).
@@ -117,10 +134,9 @@ final class FakeCollector {
     func run(force: Bool = false,
              write: ((Data, String) throws -> Void)? = nil) -> CollectorRunReport {
         if let write {
-            return Collector.run(statePath: statePath, sources: CollectorSources.standard(), ctx: ctx,
-                                 force: force, write: write)
+            return Collector.run(statePath: statePath, sources: sources, ctx: ctx, force: force, write: write)
         }
-        return Collector.run(statePath: statePath, sources: CollectorSources.standard(), ctx: ctx, force: force)
+        return Collector.run(statePath: statePath, sources: sources, ctx: ctx, force: force)
     }
 
     func state() -> CollectorState? { try? CollectorStateStore.load(path: statePath) }

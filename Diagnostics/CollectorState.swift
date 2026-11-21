@@ -12,7 +12,8 @@
 //    { "schema": 1, "generatedAt": <date>,
 //      "schedules": { "<SourceID>": SourceSchedule, ... },   // collector's adaptive policy state
 //      "usage": { "generatedAt": <date>, "accounts": [AccountUsage, ...] },
-//      "refresh": { "sessions": [RefreshSession, ...] } }      // #10, optional
+//      "refresh": { "sessions": [RefreshSession, ...] },       // #10, optional
+//      "calendar": { "generatedAt": <date>, "events": [CalendarEvent, ...] } }  // #11, optional
 //  Each section carries its own generatedAt (time of its last successful
 //  fetch) and each account its own. Later tickets add sibling sections
 //  (calendar, refresh sessions) as optional members: old readers ignore
@@ -38,15 +39,18 @@ struct CollectorState: Codable, Equatable {
     /// The collector's own `claude -p` token-refresh runs. The saver hides
     /// these session ids from the AGENTS panel.
     var refresh: RefreshSection? = nil
+    /// Upcoming events from `gws calendar +agenda` (#11).
+    var calendar: CalendarSection? = nil
 
     init(schema: Int = CollectorState.currentSchema, generatedAt: Date? = nil,
          schedules: [SourceID: SourceSchedule] = [:], usage: UsageSection? = nil,
-         refresh: RefreshSection? = nil) {
+         refresh: RefreshSection? = nil, calendar: CalendarSection? = nil) {
         self.schema = schema
         self.generatedAt = generatedAt
         self.schedules = schedules
         self.usage = usage
         self.refresh = refresh
+        self.calendar = calendar
     }
 
     /// Session ids the AGENTS panel must never show or count.
@@ -72,6 +76,26 @@ struct RefreshSession: Codable, Equatable {
 /// Source ids the collector registers (keys of `CollectorState.schedules`).
 enum CollectorSourceIDs {
     static let usage: SourceID = "USAGE"
+    static let calendar: SourceID = "CALENDAR"
+}
+
+struct CalendarSection: Codable, Equatable {
+    /// Last successful agenda fetch; nil = never succeeded (see lastError).
+    var generatedAt: Date?
+    /// Events from now to the end of the agenda window, by start time. Titles
+    /// live only in this local file; the saver shows them on trusted networks only.
+    var events: [CalendarEvent]
+    /// Short, non-sensitive category of the last failure (`AUTH`, `EXIT 2`,
+    /// `TIMEOUT`, `PARSE`, `NO GWS`); nil after a success.
+    var lastError: String? = nil
+}
+
+struct CalendarEvent: Codable, Equatable {
+    var summary: String
+    var start: Date
+    var end: Date
+    /// All-day events (a bare `YYYY-MM-DD` start) are kept but never shown.
+    var allDay: Bool
 }
 
 struct UsageSection: Codable, Equatable {

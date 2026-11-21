@@ -60,6 +60,13 @@ struct CollectorContext {
     var sleep: (TimeInterval) -> Void = { _ in }
     /// Persist `state` now (mid-run). Collector.run wires it to the atomic writer.
     var checkpoint: (CollectorState) -> Void = { _ in }
+
+    // Calendar (#11).
+    /// Resolved `gws` binary (BinaryResolver), nil when not installed.
+    var gwsPath: String? = nil
+    /// Runs the agenda command and captures stdout. Live: LiveProcess.capture.
+    /// Tests inject a fake: the real gws is never run from tests.
+    var runAgenda: (ProcessSpec) throws -> ProcessOutput = { _ in throw ProcessSpec.NoRunner() }
 }
 
 /// A child process to run: absolute executable, explicit environment.
@@ -76,6 +83,13 @@ struct ProcessSpec: Equatable {
 struct ProcessResult: Equatable {
     var status: Int32
     var timedOut: Bool
+}
+
+/// A finished child whose stdout was captured (stderr is discarded).
+struct ProcessOutput: Equatable {
+    var status: Int32
+    var timedOut: Bool
+    var stdout: Data
 }
 
 /// One collector data source. `fetch` updates its own section of `state`
