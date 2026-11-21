@@ -107,7 +107,7 @@ enum SessionReader {
     /// exist but none of them parse (a format change must never read as zero).
     /// `background` counts background agents (it caches fallback lookups, so
     /// the poll source keeps one across scans); `now` is the freshness clock.
-    static func scan(home: String, isAlive: LivenessChecker, now: Date = Date(),
+    static func scan(home: String, isAlive: LivenessChecker, now: Date,
                      background: BackgroundAgentScanner = BackgroundAgentScanner()) throws -> SessionScan {
         let fm = FileManager.default
         let entries: [String]
