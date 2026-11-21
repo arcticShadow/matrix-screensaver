@@ -95,6 +95,7 @@ final class DiagnosticsCore {
                             saverStart: saverStart, timeZone: env.timeZone())
         inp.vitals = section(snap.vitals, SourceIDs.vitals, snap, now)
         inp.power = section(snap.power, SourceIDs.power, snap, now)
+        inp.usage = UsageBlock.lines(snap.collector?.value, config: config, now: now)
         inp.flavour = Flavour.lines(now: now)
         if showDebug {
             inp.debug = PollSources.order.compactMap { id in

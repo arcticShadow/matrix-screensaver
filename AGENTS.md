@@ -24,6 +24,9 @@
 | `Diagnostics/AgentsPanel.swift` | `AgentClassifier` (ATTENTION/ACTIVE/AWAITING/DORMANT/GHOST, `AgentsCfg` tunables) and the pure AGENTS panel builder (totals, sorted roster, dormant fold, `+N more`). |
 | `Diagnostics/Naming.swift` | `DisplayNamer` (the one place a session's on-screen name is decided), salted `Codename`, `ProfileTags`. |
 | `Diagnostics/Layout.swift` | `PanelLayout.place`: which corner and width each panel gets. `PanelRotation`: SYS and AGENTS diagonally opposite, stepping clockwise together once per interval (step 0 = SYS top-left, AGENTS bottom-right). |
+| `Diagnostics/CollectorState.swift` | The collector state-file schema (`CollectorState`, `UsageSection`, `AccountUsage`) + `CollectorStateStore` (ISO-8601 ms dates). Shared by saver and collector. |
+| `Diagnostics/UsageBlock.swift` | Saver side of the collector: `CollectorReader` (poll source `COL`, 5 s) and the SYS `CLAUDE.USAGE` lines (meters, STALE, XTRA, COLLECTOR OFFLINE). |
+| `Collector/` | The unsandboxed collector executable (`mise run collector:build`): `Collector.swift` run loop + `CollectorSource` protocol + `AtomicFile`, `UsageSource.swift` (keychain naming, discovery, usage endpoint), `LiveDeps.swift` (`security`, URLSession allowlist, binary resolution), `CollectorLog.swift`, `main.swift`. |
 | `Tests/` | Plain `swiftc` test executable (`main.swift` lists suites, `TestKit.swift` assertion helper, one `*Tests.swift` per seam). |
 | `Harness/main.swift` | Offscreen render harness: real MatrixView + fake environment -> PNGs. |
 | `mise.toml` | `build`, `test`, `snapshot`, `install`, `package`, `preview`, `clean` tasks. **Authoritative build commands.** |
@@ -45,7 +48,7 @@ mise run install    # build + copy to ~/Library/Screen Savers + kill the hosts s
 
 ## Source layout rules
 
-- The single-file rule is relaxed: saver = `MatrixView.swift` + `PanelRenderer.swift` (AppKit) + `Diagnostics/*.swift` (core), compiled as one module. A future collector executable compiles `Diagnostics/*.swift` + its own `main.swift`, so the core must stay UI-free and free of global side effects.
+- The single-file rule is relaxed: saver = `MatrixView.swift` + `PanelRenderer.swift` (AppKit) + `Diagnostics/*.swift` (core), compiled as one module. The collector executable compiles `Diagnostics/*.swift` + `Collector/*.swift`, so the core must stay UI-free and free of global side effects.
 - Content decisions (what a line says, its severity) belong in the core and are tested there. The renderer only maps `Severity`/`LineStyle` to colours and geometry.
 - Anything from the outside world (time, files, home, Wi-Fi, process liveness, …) is a member of `DiagnosticsEnvironment`, never called directly from a builder.
 - Tests assert on the panel model at the highest seam (`DiagnosticsCore` with a fake home tree via `FakeWorld` in `Tests/CoreTests.swift`, or a panel builder), never on drawing or private helpers. Expected values are literals.
