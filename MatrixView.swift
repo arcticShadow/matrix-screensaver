@@ -397,11 +397,7 @@ final class MatrixView: ScreenSaverView {
     /// The trust decision only (trusted/untrusted/unverified), never the Wi-Fi name.
     private var netTrustLabel: String {
         guard let core = diagnostics, isPolling else { return "-" }
-        switch core.networkTrust() {
-        case .trusted: return "trusted"
-        case .untrusted: return "untrusted"
-        case .unverified: return "unverified"
-        }
+        return core.networkTrust().label
     }
     #endif
 

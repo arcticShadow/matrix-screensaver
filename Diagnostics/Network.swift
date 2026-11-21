@@ -37,6 +37,15 @@ enum NetworkTrust: Equatable {
 
     var isTrusted: Bool { self == .trusted }
 
+    /// `trusted` / `untrusted` / `unverified`: the decision only, safe to log.
+    var label: String {
+        switch self {
+        case .trusted: return "trusted"
+        case .untrusted: return "untrusted"
+        case .unverified: return "unverified"
+        }
+    }
+
     /// - Parameters:
     ///   - wifi: the latest Wi-Fi sample (nil = never read).
     ///   - current: false when the reading can't be relied on any more (the

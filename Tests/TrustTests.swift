@@ -31,6 +31,11 @@ func isCodename(_ n: String) -> Bool {
 let trustedConfig = #"{ "codenameSalt": "s", "trustedSSIDs": ["TrustedNet", "Lab 5G"] }"#
 
 func trustTests() {
+    test("trust: the decision has a log-safe label (never the Wi-Fi name)") {
+        expectEqual([NetworkTrust.trusted, .untrusted, .unverified].map(\.label),
+                    ["trusted", "untrusted", "unverified"])
+    }
+
     test("trust: on a trusted Wi-Fi the roster shows real repo names, no NET tag") {
         let w = FakeWorld("trust-trusted")
         w.writeConfig(trustedConfig)
