@@ -27,7 +27,7 @@ accent colour-per-column.
 | `PanelRenderer.swift` | Draws the diagnostic overlay's panels (AppKit). |
 | `Diagnostics/` | UI-free diagnostics core: config, panel model, panel builders. No AppKit, unit-tested. |
 | `Tests/` | Plain `swiftc` test executable for the core (`mise run test`; no XCTest). |
-| `Collector/` | Optional unsandboxed collector (`mise run collector:build`): per-account Claude usage -> `~/.local/state/matrix-diag/collector-state.json`, which the saver's SYS panel reads. Expired tokens are refreshed by Claude Code itself via a hidden `claude -p` run (at most hourly, once data is 2 h stale); those runs never appear in AGENTS. |
+| `Collector/` | Optional unsandboxed collector (`mise run collector:build`): per-account Claude usage and upcoming calendar events (`gws`) -> `~/.local/state/matrix-diag/collector-state.json`, which the saver's SYS panel reads. Expired tokens are refreshed by Claude Code itself via a hidden `claude -p` run (at most hourly, once data is 2 h stale); those runs never appear in AGENTS. |
 | `mise.collector.toml` | Opt-in LaunchAgent install for the collector (`mise -E collector bootstrap`; see below). |
 | `Harness/` | Offscreen render harness (`mise run snapshot`): renders rain + overlay to PNGs with a fake environment. |
 | `build/SolarizedMatrix.saver/` | Bundle skeleton (`Info.plist` + `MacOS/`). Rebuild the binary from source. |
@@ -61,7 +61,13 @@ prompt (`APPROVE BASH`, `INPUT NEEDED`) is ever shown, never the command. If
 the session files can't be parsed it says `AGENT.LINK SIGNAL LOST` rather than
 showing zero. To spare OLED/XDR screens from burn-in, the two panels rotate
 clockwise together one corner every 10 minutes, always diagonally opposite and
-clear of the logo (the roster shortens if the logo is in its way). Usage limits and calendar are on the way — see issue #1.
+clear of the logo (the roster shortens if the logo is in its way).
+
+With the optional collector installed (below), SYS also shows Claude usage per
+account and a CALENDAR line: the next upcoming timed event
+(`NEXT 14:30 Standup (in 22m)`, amber within 5 minutes) or `NOW ▸ <title>` while
+one is in progress. All-day events are skipped. Event titles follow the same
+trusted-network rule as repo names and read `EVENT` anywhere else.
 
 Real repo names replace the codenames only on a **trusted network**: when the
 current Wi-Fi name can be read and is one of the `trustedSSIDs` in your config
@@ -140,11 +146,16 @@ the generated `Info.plist`. Cutting a full GitHub release is documented in the
 
 ### Installing the collector (optional)
 
-The usage block in the SYS panel needs the unsandboxed collector, run by launchd
-every 60 s. It reads the Claude OAuth token of each `~/.claude*` account from the
-login keychain (via `/usr/bin/security`), makes one read-only request per account to
-the Claude usage endpoint, and writes `~/.local/state/matrix-diag/collector-state.json`.
-Without it the saver shows `COLLECTOR OFFLINE` there and everything else still works.
+The usage and calendar blocks in the SYS panel need the unsandboxed collector, run by
+launchd every 60 s. Every 5 minutes it reads the Claude OAuth token of each `~/.claude*`
+account from the login keychain (via `/usr/bin/security`) and makes one read-only request
+per account to the Claude usage endpoint, and runs `gws calendar +agenda --days 2 --format json`
+(the [Google Workspace CLI](https://github.com/googleworkspace/cli), single signed-in
+account; keeps only each event's title, start, end and all-day flag). It writes
+`~/.local/state/matrix-diag/collector-state.json`. Without it the saver shows
+`COLLECTOR OFFLINE` there and everything else still works. If `gws` is missing or
+signed out (`gws auth login`), the calendar shows `NO SIGNAL` (or its last events,
+marked stale) and the collector retries with backoff.
 
 It is opt-in: it lives in `mise.collector.toml`, which only loads with `-E collector`,
 so a plain `mise bootstrap` (or your global machine bootstrap) never installs it.

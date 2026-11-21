@@ -119,6 +119,8 @@ final class DiagnosticsCore {
         inp.vitals = section(snap.vitals, SourceIDs.vitals, snap, now)
         inp.power = section(snap.power, SourceIDs.power, snap, now)
         inp.usage = UsageBlock.lines(snap.collector?.value, config: config, now: now)
+        inp.calendar = CalendarBlock.lines(snap.collector?.value, trusted: networkTrust(snap, now).isTrusted,
+                                           now: now, timeZone: inp.timeZone)
         inp.flavour = Flavour.lines(now: now)
         if showDebug {
             inp.debug = PollSources.order.compactMap { id in

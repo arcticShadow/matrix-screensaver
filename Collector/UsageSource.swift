@@ -11,9 +11,9 @@ import Foundation
 import CryptoKit
 
 enum CollectorSources {
-    /// The collector's source registry. Add new sources here (calendar, ...).
+    /// The collector's source registry. Add new sources here.
     static func standard() -> [CollectorSource] {
-        [UsageSource()]
+        [UsageSource(), CalendarSource()]
     }
 }
 

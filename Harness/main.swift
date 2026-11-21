@@ -145,7 +145,27 @@ let scenarios = [
              configJSON: #"{ "codenameSalt": "harness-demo", "trustedSSIDs": ["TrustedNet"] }"#,
              sessions: demoSessions, wifi: nil),
     Scenario(name: "overlay-usage", collector: fakeUsageState()),
+    // Calendar: trusted -> real (fake) title + countdown; untrusted -> EVENT, in progress.
+    Scenario(name: "overlay-calendar", configJSON: #"{ "trustedSSIDs": ["TrustedNet"] }"#,
+             wifi: "TrustedNet", collector: withCalendar(fakeUsageState(), startsIn: 22 * 60)),
+    Scenario(name: "overlay-calendar-untrusted", configJSON: #"{ "trustedSSIDs": ["TrustedNet"] }"#,
+             wifi: "CafeNet", collector: withCalendar(fakeUsageState(), startsIn: -10 * 60)),
 ] + realUsageScenario()
+
+/// Adds a fresh calendar section: an all-day event (never shown) and a
+/// 30-min "Standup" starting `startsIn` seconds after t0.
+func withCalendar(_ base: CollectorState, startsIn: TimeInterval) -> CollectorState {
+    var st = base
+    var sched = SourceSchedule(baseInterval: 300)
+    sched.recordSuccess(at: t0.addingTimeInterval(-40), duration: 2.1)
+    st.schedules[CollectorSourceIDs.calendar] = sched
+    let start = t0.addingTimeInterval(startsIn)
+    st.calendar = CalendarSection(generatedAt: t0.addingTimeInterval(-40), events: [
+        CalendarEvent(summary: "Holiday", start: t0.addingTimeInterval(-3600), end: t0.addingTimeInterval(9 * 3600), allDay: true),
+        CalendarEvent(summary: "Standup", start: start, end: start.addingTimeInterval(1800), allDay: false),
+    ])
+    return st
+}
 
 func realUsageScenario() -> [Scenario] {
     guard let path = ProcessInfo.processInfo.environment["SM_COLLECTOR_STATE"] else { return [] }

@@ -93,6 +93,17 @@ enum LiveProcess {
     /// Run a child with exactly `spec.environment` (the caller has already put
     /// HOME/USER in it), output discarded, terminated after `spec.timeout`.
     static func run(_ spec: ProcessSpec) throws -> ProcessResult {
+        let r = try launch(spec, captureStdout: false)
+        return ProcessResult(status: r.status, timedOut: r.timedOut)
+    }
+
+    /// Same, but stdout is captured (read concurrently, so a chatty child
+    /// can't fill the pipe and stall). Used for `gws calendar +agenda`.
+    static func capture(_ spec: ProcessSpec) throws -> ProcessOutput {
+        try launch(spec, captureStdout: true)
+    }
+
+    private static func launch(_ spec: ProcessSpec, captureStdout: Bool) throws -> ProcessOutput {
         try? FileManager.default.createDirectory(atPath: spec.workingDirectory, withIntermediateDirectories: true)
         let p = Process()
         p.executableURL = URL(fileURLWithPath: spec.executable)
@@ -100,11 +111,22 @@ enum LiveProcess {
         p.environment = spec.environment
         p.currentDirectoryURL = URL(fileURLWithPath: spec.workingDirectory)
         p.standardInput = FileHandle.nullDevice
-        p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
+        let pipe = captureStdout ? Pipe() : nil
+        p.standardOutput = pipe ?? FileHandle.nullDevice
+        var output = Data()
+        let readDone = DispatchSemaphore(value: 0)
         let done = DispatchSemaphore(value: 0)
         p.terminationHandler = { _ in done.signal() }
         try p.run()
+        if let pipe {
+            DispatchQueue.global().async {
+                output = pipe.fileHandleForReading.readDataToEndOfFile()
+                readDone.signal()
+            }
+        } else {
+            readDone.signal()
+        }
         var timedOut = false
         if done.wait(timeout: .now() + spec.timeout) == .timedOut {
             timedOut = true
@@ -114,7 +136,12 @@ enum LiveProcess {
                 done.wait()
             }
         }
-        return ProcessResult(status: p.terminationStatus, timedOut: timedOut)
+        // EOF arrives once the child (and anything holding its stdout) exits.
+        // (If it doesn't, the reader still owns `output`: return none of it.)
+        guard readDone.wait(timeout: .now() + 5) == .success else {
+            return ProcessOutput(status: p.terminationStatus, timedOut: true, stdout: Data())
+        }
+        return ProcessOutput(status: p.terminationStatus, timedOut: timedOut, stdout: output)
     }
 }
 

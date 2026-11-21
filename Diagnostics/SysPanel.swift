@@ -19,6 +19,8 @@ struct SysInputs: Equatable {
     var power: SectionData<PowerStatus>? = nil
     /// CLAUDE.USAGE block (see UsageBlock); empty = not shown.
     var usage: [PanelLine] = []
+    /// CALENDAR block (see CalendarBlock); empty = not shown.
+    var calendar: [PanelLine] = []
     /// Atmosphere lines (see Flavour).
     var flavour: [String] = []
     /// Per-source fetch stats; empty = debug lines hidden.
@@ -69,6 +71,7 @@ enum SysPanel {
             lines.append(powerLine(pct, onAC: onAC, charging: charging))
         }
         lines.append(contentsOf: inp.usage)
+        lines.append(contentsOf: inp.calendar)
         if !inp.flavour.isEmpty {
             lines.append(.rule)
             lines.append(contentsOf: inp.flavour.enumerated().map {
