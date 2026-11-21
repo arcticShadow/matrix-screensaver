@@ -151,7 +151,7 @@ func waitFor(_ timeout: TimeInterval = 2, _ cond: () -> Bool) -> Bool {
     return cond()
 }
 
-func makeContext() throws -> (NSBitmapImageRep, NSGraphicsContext) {
+func makeContext(_ size: NSSize = size) throws -> (NSBitmapImageRep, NSGraphicsContext) {
     guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil,
                                      pixelsWide: Int(size.width * scale),
                                      pixelsHigh: Int(size.height * scale),
@@ -264,6 +264,49 @@ func frameTimeCheck() throws {
                  idle.0, idle.1, idle.2, busy.0, busy.1, busy.2))
 }
 
+/// Burn-in rotation with a shortened interval (5 s per corner): one PNG per
+/// position, rotation-<label>-<step>-sys-<corner>.png, with the busy AGENTS
+/// roster so the per-corner height cap and logo clearance are visible.
+func renderRotation(_ size: NSSize, label: String) throws {
+    let interval: TimeInterval = 5
+    let clock = Clock()
+    let s = Scenario(name: "rotation", configJSON: #"{ "codenameSalt": "harness-demo" }"#, sessions: demoSessions)
+    let env = makeWorld(s, clock: clock)
+    let hub = PollerHub(tickInterval: 0.01)
+    guard let view = MatrixView(frame: NSRect(origin: .zero, size: size), isPreview: false,
+                                environment: env, pollerHub: hub) else { throw NSError(domain: "harness", code: 1) }
+    view.displayRoleOverride = true
+    view.panelRotationInterval = interval
+    // Start at the beginning of a rotation cycle (step 0).
+    let cycle = 4 * interval
+    clock.advance(cycle - clock.now.timeIntervalSince1970.truncatingRemainder(dividingBy: cycle))
+    let (_, ctx) = try makeContext(size)
+    NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = ctx
+    let perStep = max(1, frames / 2)
+    let step = (interval - 0.1) / Double(perStep)   // stay inside the interval while the rain fills
+    for k in 0..<4 {
+        for i in 0..<perStep {
+            view.animateOneFrame()
+            if i == 0, k == 0 { _ = waitFor { clock.vitalsFetches > 0 }; Thread.sleep(forTimeInterval: 0.05) }
+            view.draw(view.bounds)
+            clock.advance(step)
+        }
+        let corner = PanelRotation(interval: interval).sysCorner(at: clock.now)
+        let path = "\(outDir)/rotation-\(label)-\(k)-sys-\(corner).png"
+        // Snapshot the live context (the rep's PNG encoding is cached after
+        // the first call, so re-encoding the rep would repeat frame one).
+        ctx.flushGraphics()
+        guard let img = ctx.cgContext.makeImage(),
+              let png = NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:])
+        else { throw NSError(domain: "harness", code: 3) }
+        try png.write(to: URL(fileURLWithPath: path))
+        print("wrote \(path)")
+        clock.advance(0.1)   // cross into the next interval
+    }
+    NSGraphicsContext.restoreGraphicsState()
+    view.stopAnimation()
+}
+
 /// REAL_HOME=1: render once against the live environment (real home, real
 /// clock, real liveness), read-only. For a local check only: the screenshot
 /// shows real totals and salted codenames, never folder or repo names.
@@ -295,5 +338,7 @@ for s in scenarios {
     let path = try autoreleasepool { try render(s) }
     print("wrote \(path)")
 }
+try autoreleasepool { try renderRotation(NSSize(width: 1728, height: 1117), label: "1728x1117") }
+try autoreleasepool { try renderRotation(size, label: "1440x900") }
 try autoreleasepool { try sharedPollerCheck() }
 if ProcessInfo.processInfo.environment["TIMING"] == "1" { try autoreleasepool { try frameTimeCheck() } }

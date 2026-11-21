@@ -23,7 +23,7 @@
 | `Diagnostics/Sessions.swift` | Session discovery (`~/.claude*` dirs with `sessions/`, canonical `<pid>.json` only), `SessionRecord`, `WaitCategory` (the only part of `waitingFor` kept), `Liveness` (`proc_pidinfo` + UTC `procStart`). |
 | `Diagnostics/AgentsPanel.swift` | `AgentClassifier` (ATTENTION/ACTIVE/AWAITING/DORMANT/GHOST, `AgentsCfg` tunables) and the pure AGENTS panel builder (totals, sorted roster, dormant fold, `+N more`). |
 | `Diagnostics/Naming.swift` | `DisplayNamer` (the one place a session's on-screen name is decided), salted `Codename`, `ProfileTags`. |
-| `Diagnostics/Layout.swift` | `PanelLayout.place`: which corner and width each panel gets (SYS top-left, AGENTS bottom-right). |
+| `Diagnostics/Layout.swift` | `PanelLayout.place`: which corner and width each panel gets. `PanelRotation`: SYS and AGENTS diagonally opposite, stepping clockwise together once per interval (step 0 = SYS top-left, AGENTS bottom-right). |
 | `Tests/` | Plain `swiftc` test executable (`main.swift` lists suites, `TestKit.swift` assertion helper, one `*Tests.swift` per seam). |
 | `Harness/main.swift` | Offscreen render harness: real MatrixView + fake environment -> PNGs. |
 | `mise.toml` | `build`, `test`, `snapshot`, `install`, `package`, `preview`, `clean` tasks. **Authoritative build commands.** |
@@ -75,7 +75,8 @@ This explicit buffer is necessary because `ScreenSaverView.draw()` does not guar
 - Scheduling (`SourceSchedule`): effective interval = `max(base, 20 × last fetch)`; failures back off `base × 2^n` capped at `10 × base`; a section shows a dim `·12s` marker once its data is older than `2 × max(base, 20 × last fetch)` (backoff deliberately excluded, so failing sources show staleness). Bases: sessions 2 s, vitals 5 s, power 60 s.
 - Adding a source: see the header comment in `Diagnostics/Poller.swift` (reader in `DiagnosticsEnvironment`, slot in `DiagSnapshot`, one `.make(...)` line in `PollSources.standard` + `order`, its panel lines).
 - Real home comes from `getpwuid(getuid())`; the sandboxed host's `NSHomeDirectory()` is its container. The sandboxed host *can* read `~/.config/matrix-diag/config.json` (verified).
-- AGENTS: session files are read on the poller queue (liveness via `proc_pidinfo` there too); a scan that can't list a sessions dir, or finds session files of which none parse, or a failing sessions source shows `AGENT.LINK SIGNAL LOST`, never zero. Private free text (`name`, `waitingFor` command, cwd, config-dir names) never reaches a `Panel`: names go through `DisplayNamer`, dirs through `ProfileTags`. The renderer sets `agentsMaxLines` from the screen height.
+- AGENTS: session files are read on the poller queue (liveness via `proc_pidinfo` there too); a scan that can't list a sessions dir, or finds session files of which none parse, or a failing sessions source shows `AGENT.LINK SIGNAL LOST`, never zero. Private free text (`name`, `waitingFor` command, cwd, config-dir names) never reaches a `Panel`: names go through `DisplayNamer`, dirs through `ProfileTags`. The renderer passes `core.layout(agentsLineCapacity:)` a per-corner line budget: the panel may grow from its corner only until it comes within `logoClearance` of a logo-mask cell in the columns it spans (cached per corner, rebuilt with the mask in `setup()`).
+- Burn-in rotation: `PanelRotation.step = floor(now / interval) mod 4`, anchored to the wall clock rather than the saver start, so short activations don't keep parking the panels in the same corners. `MatrixView.panelRotationInterval` (defaults to `Cfg.panelRotationInterval`) is the harness hook; `mise run snapshot` writes `rotation-<size>-<step>-sys-<corner>.png` at 1728x1117 and 1440x900 with a 5 s interval. At 1440x900 the logo leaves the AGENTS roster only a few lines in every corner.
 - Keep the dismissal guarantees: `autoreleasepool` in `draw`, cached attrs (renderer caches its own), terminal `didstop`, `teardown()` releases buffers, the renderer and the poller lease.
 - Real-host check without screen capture (the session is locked while the saver runs): `SM_SWIFT_FLAGS="-D SM_FRAME_DUMP" mise run install` makes the saver write `SolarizedMatrix-frame-<pid>-main-150.png` into its container's `Data/tmp` (`~/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/Data/tmp/`). Reinstall without the flag afterwards. That build also logs `draw ms p50=… p99=… max=… polling=…` every 300 frames and `poller decide/teardown leased=… running=… leases=… starts=…`.
 
@@ -88,6 +89,8 @@ This explicit buffer is necessary because `ScreenSaverView.draw()` does not guar
 | `fadeAlpha` | `0.018` | Trail length — lower = longer, glowier trails |
 | `overlayFontSize` | `15` | Overlay text size (points) |
 | `overlayMargin` | `48` | Overlay inset from the screen edge (points) |
+| `panelRotationInterval` | `600` | Seconds before both panels step one corner clockwise (burn-in protection) |
+| `logoClearance` | `16` | Minimum gap between the AGENTS panel and the logo's glyph cells (points) |
 | `PanelLayout.sysColumns` / `agentsColumns` | `34` / `46` | Panel widths in monospace cells (`Diagnostics/Layout.swift`) |
 | `AgentsCfg.awaitingWindow` | `15 min` | Idle sessions younger than this are AWAITING, older ones DORMANT (`Diagnostics/AgentsPanel.swift`) |
 | `overlayDebug` | `false` | Show per-source fetch time / effective interval lines (`DBG.VIT 1.2ms @5s`, `F2` = failing). On in `SM_FRAME_DUMP` builds. |

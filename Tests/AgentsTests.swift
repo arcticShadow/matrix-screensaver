@@ -347,7 +347,7 @@ func agentsTests() {
         core.pollNow()
         let placed = core.layout()
         expectEqual(placed.map(\.panel.title), ["SYS", "AGENTS"])
-        expectEqual(placed.map(\.corner), [.topLeft, .bottomRight])
+        expectEqual(placed[1].corner, placed[0].corner.opposite)
         expect(placed[1].columns >= placed[0].columns, "AGENTS rows need at least SYS width")
     }
 

@@ -31,6 +31,8 @@ final class DiagnosticsCore {
     /// AGENTS panel height budget in lines; the renderer sets it from the
     /// screen height.
     var agentsMaxLines = 40
+    /// Burn-in rotation of the panel corners (the saver sets its `Cfg` interval).
+    var rotation = PanelRotation()
 
     private let mode: PollingMode
     private var manualEngine: PollEngine?
@@ -103,7 +105,14 @@ final class DiagnosticsCore {
     }
 
     /// Panels with their screen placement (the one place corners are decided).
-    func layout() -> [PlacedPanel] { PanelLayout.place(panels(), now: env.now()) }
+    /// `agentsLineCapacity` gives the AGENTS line budget for a corner (the
+    /// renderer knows the screen and the logo); it is asked for the corner
+    /// AGENTS occupies right now, so the roster cap follows the rotation.
+    func layout(agentsLineCapacity: ((PanelCorner) -> Int)? = nil) -> [PlacedPanel] {
+        let now = env.now()
+        if let cap = agentsLineCapacity { agentsMaxLines = cap(rotation.agentsCorner(at: now)) }
+        return PanelLayout.place(panels(), now: now, rotation: rotation)
+    }
 
     private func agentsPanel(_ snap: DiagSnapshot, _ now: Date) -> Panel {
         let sec = section(snap.sessions, SourceIDs.sessions, snap, now)
