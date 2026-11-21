@@ -1,0 +1,190 @@
+# mise.toml — reproducible build / package / install for the SolarizedMatrix screensaver.
+# Docs: https://mise.jdx.dev/tasks/
+#
+#   mise run build      # compile + ad-hoc sign        -> build/SolarizedMatrix.saver
+#   mise run package    # build saver + collector, zip  -> SolarizedMatrix.saver.zip
+#   mise run install    # build, then install to ~/Library/Screen Savers and reload
+#   mise run clean      # remove the built bundle and the zip
+#   mise run test       # compile Diagnostics/ + Tests/ into build/tests and run (non-zero on failure)
+#   mise run collector:build  # compile the collector  -> build/collector/matrix-diag-collector
+#   mise -E collector bootstrap       # OPT-IN: install the collector LaunchAgent (mise.collector.toml)
+#   mise run collector:uninstall [--purge]  # remove it again (config kept unless --purge)
+#   mise run snapshot   # render rain + overlay offscreen to PNGs in build/snapshot (no screensaver host)
+#
+# Cutting a release is driven by the `release` skill in .claude/skills/release/,
+# which calls these tasks to produce the artifact.
+
+[env]
+# Single source of truth for the release version. Bump this, then `mise run package`.
+SM_VERSION = "0.2"
+
+[tasks.build]
+description = "Compile MatrixView + PanelRenderer + Diagnostics/ into an ad-hoc-signed SolarizedMatrix.saver bundle"
+run = '''
+set -eu
+
+bundle="build/SolarizedMatrix.saver"
+macos="$bundle/Contents/MacOS"
+mkdir -p "$macos" "$bundle/Contents/Resources"
+
+# Info.plist is generated (build/ is git-ignored) so the bundle is reproducible
+# from a clean checkout. SM_VERSION is the single source of truth for the version.
+cat > "$bundle/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>SolarizedMatrix</string>
+    <key>CFBundleIdentifier</key>
+    <string>law.jude.SolarizedMatrix</string>
+    <key>CFBundleName</key>
+    <string>SolarizedMatrix</string>
+    <key>CFBundlePackageType</key>
+    <string>BNDL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${SM_VERSION}</string>
+    <key>CFBundleVersion</key>
+    <string>${SM_VERSION}</string>
+    <key>NSPrincipalClass</key>
+    <string>SolarizedMatrix.MatrixView</string>
+</dict>
+</plist>
+PLIST
+
+# The saver = AppKit renderer (MatrixView + PanelRenderer) + the UI-free core.
+swiftc MatrixView.swift PanelRenderer.swift Diagnostics/*.swift \
+  -module-name SolarizedMatrix \
+  -emit-library -Xlinker -bundle ${SM_SWIFT_FLAGS:-} \
+  -o "$macos/SolarizedMatrix" \
+  -framework ScreenSaver -framework AppKit -framework Foundation \
+  -target arm64-apple-macosx13.0
+
+# Ad-hoc sign so macOS will load the bundle once the user clears quarantine.
+codesign -f -s - "$bundle"
+
+# A screensaver MUST be a Mach-O bundle, not a dylib, or macOS refuses to load it.
+file "$macos/SolarizedMatrix" | grep -q "Mach-O 64-bit bundle" \
+  || { echo "ERROR: $macos/SolarizedMatrix is not a Mach-O bundle"; exit 1; }
+
+echo "Built $bundle (v$SM_VERSION)"
+'''
+
+[tasks.test]
+description = "Compile the diagnostics core + plain swiftc test executable and run it"
+run = '''
+set -eu
+# The core must stay UI-free so the collector (and these tests) can link it.
+if grep -nE '^[[:space:]]*import[[:space:]]+(AppKit|ScreenSaver|Cocoa|SwiftUI)' Diagnostics/*.swift Collector/*.swift; then
+  echo "ERROR: Diagnostics/ and Collector/ must not import AppKit/ScreenSaver"; exit 1
+fi
+mkdir -p build/tests
+rm -rf build/test-tmp
+# The collector's library files (everything in Collector/ except its main.swift)
+# are linked in too, so both seams are tested from one executable.
+collector_lib=$(ls Collector/*.swift | grep -v '/main\.swift$')
+swiftc Diagnostics/*.swift $collector_lib Tests/*.swift \
+  -module-name DiagnosticsTests \
+  -o build/tests/DiagnosticsTests \
+  -target arm64-apple-macosx13.0
+./build/tests/DiagnosticsTests
+'''
+
+[tasks."collector:build"]
+description = "Compile the collector (Diagnostics/ core + Collector/) -> build/collector/matrix-diag-collector"
+run = '''
+set -eu
+mkdir -p build/collector
+swiftc Diagnostics/*.swift Collector/*.swift \
+  -module-name MatrixDiagCollector \
+  -O ${SM_SWIFT_FLAGS:-} \
+  -o build/collector/matrix-diag-collector \
+  -target arm64-apple-macosx13.0
+codesign -f -s - build/collector/matrix-diag-collector
+echo "Built build/collector/matrix-diag-collector"
+'''
+
+# The real uninstall lives in mise.collector.toml (so a release zip, which ships
+# only that file, has it too). This makes it reachable without `-E collector`;
+# with -E collector the same-named task there takes precedence (no recursion).
+[tasks."collector:uninstall"]
+description = "Remove the collector LaunchAgent, binary, logs and state (config kept unless --purge)"
+usage = 'flag "--purge" help="Also delete the config file"'
+run = '''
+if [ "${usage_purge:-false}" = "true" ]; then exec mise -E collector run collector:uninstall --purge
+else exec mise -E collector run collector:uninstall; fi
+'''
+
+[tasks.snapshot]
+description = "Render rain + overlay offscreen (fake environment, no screensaver host) to PNGs in build/snapshot"
+run = '''
+set -eu
+mkdir -p build/snapshot
+swiftc MatrixView.swift PanelRenderer.swift Diagnostics/*.swift Harness/main.swift \
+  -module-name SolarizedMatrix \
+  -o build/snapshot/SnapshotHarness \
+  -framework ScreenSaver -framework AppKit -framework Foundation \
+  -target arm64-apple-macosx13.0
+./build/snapshot/SnapshotHarness build/snapshot "${FRAMES:-150}"
+'''
+
+[tasks.package]
+description = "Build the saver + collector, then zip SolarizedMatrix.saver.zip (saver, collector, mise.collector.toml, INSTALL.txt)"
+depends = ["build", "collector:build"]
+run = '''
+set -eu
+# Everything sits in ONE top-level folder, so Archive Utility unpacks a single
+# `SolarizedMatrix/` (not a folder named after the zip, which would end in .saver).
+# The prebuilt collector MUST be named `matrix-diag-collector` and sit next to
+# mise.collector.toml: its bootstrap task installs that file instead of building.
+stage_root="build/package"
+stage="$stage_root/SolarizedMatrix"
+rm -rf "$stage_root" SolarizedMatrix.saver.zip
+mkdir -p "$stage"
+cp -R build/SolarizedMatrix.saver "$stage/"
+cp build/collector/matrix-diag-collector "$stage/"
+cp mise.collector.toml INSTALL.txt "$stage/"
+
+# Refuse to ship something that will not run.
+file "$stage/matrix-diag-collector" | grep -q "Mach-O 64-bit executable" \
+  || { echo "ERROR: matrix-diag-collector is not a Mach-O executable"; exit 1; }
+codesign -v "$stage/SolarizedMatrix.saver"
+codesign -v "$stage/matrix-diag-collector"
+
+# Name the staged folder explicitly so screenshots etc. in build/ are never zipped in.
+(cd "$stage_root" && zip -r -X -y ../../SolarizedMatrix.saver.zip SolarizedMatrix >/dev/null)
+echo "Packaged SolarizedMatrix.saver.zip (v$SM_VERSION):"
+unzip -l SolarizedMatrix.saver.zip
+'''
+
+[tasks.install]
+description = "Build, then install into ~/Library/Screen Savers and reload the screensaver engine"
+depends = ["build"]
+run = '''
+set -eu
+dest="$HOME/Library/Screen Savers"
+mkdir -p "$dest"
+rm -rf "$dest/SolarizedMatrix.saver"
+cp -R build/SolarizedMatrix.saver "$dest/"
+killall legacyScreenSaver 2>/dev/null || true
+killall ScreenSaverEngine 2>/dev/null || true
+echo "Installed to $dest/SolarizedMatrix.saver — pick SolarizedMatrix in System Settings."
+'''
+
+[tasks.preview]
+description = "Regenerate the animated README preview (assets/matrix-preview.svg)"
+run = '''
+set -eu
+mkdir -p assets
+python3 tools/gen_preview.py > assets/matrix-preview.svg
+echo "Wrote assets/matrix-preview.svg ($(wc -c < assets/matrix-preview.svg) bytes)"
+'''
+
+[tasks.clean]
+description = "Remove the built bundle and the packaged zip"
+run = '''
+set -eu
+rm -rf build/SolarizedMatrix.saver build/package
+rm -f SolarizedMatrix.saver.zip
+echo "Cleaned build/SolarizedMatrix.saver, build/package and SolarizedMatrix.saver.zip"
+'''
