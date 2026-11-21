@@ -20,7 +20,7 @@ struct PlacedPanel: Equatable {
 
 enum PanelLayout {
     static let sysColumns = 34
-    static let agentsColumns = 46   // widest row: 13-char codename + tags + `APPROVE <10-char tool> 59m`
+    static let agentsColumns = 52   // widest row: 13-char codename + tags + `APPROVE <10-char tool> 59m +99 BG`
 
     static func place(_ panels: [Panel], now: Date) -> [PlacedPanel] {
         panels.map { p in

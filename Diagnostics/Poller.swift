@@ -62,8 +62,9 @@ enum PollSources {
         [
             .make(SourceIDs.vitals, every: 5, read: env.readVitals, into: \.vitals),
             .make(SourceIDs.power, every: 60, read: env.readPower, into: \.power),
-            .make(SourceIDs.sessions, every: 2, read: { [home = env.homeDirectory, alive = env.isProcessAlive] in
-                try SessionReader.scan(home: home, isAlive: alive)
+            .make(SourceIDs.sessions, every: 2, read: { [home = env.homeDirectory, alive = env.isProcessAlive,
+                                                          now = env.now, bg = BackgroundAgentScanner()] in
+                try SessionReader.scan(home: home, isAlive: alive, now: now(), background: bg)
             }, into: \.sessions),
         ]
     }
