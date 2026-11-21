@@ -121,10 +121,11 @@ enum AgentsPanel {
         ]
         // Compact totals: the same counts on one line, red while anything
         // needs attention (used when the full block would crowd out the rows).
-        let compact = PanelLine.text(
-            "RUN \(live.count) · ATT \(attention) · ACT \(active) · AWT \(awaiting) · DOR \(dormant) · BG \(background)"
+        // It takes over the ATTENTION row's pulse.
+        let compact = PanelLine(style: .text,
+            label: "RUN \(live.count) · ATT \(attention) · ACT \(active) · AWT \(awaiting) · DOR \(dormant) · BG \(background)"
                 + (inp.staleMarker.map { " \($0)" } ?? ""),
-            attention > 0 ? .alert : .normal)
+            value: "", severity: attention > 0 ? .alert : .normal, pulse: attention > 0)
 
         // Individually listed: attention (longest waiting first), active
         // (longest running first), awaiting (most recently idle first).

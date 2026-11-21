@@ -163,6 +163,14 @@ final class PanelRenderer {
                     let x = p.x + CGFloat(columns - line.value.count) * cellW
                     (line.value as NSString).draw(at: CGPoint(x: x, y: p.y), withAttributes: dotAttrs)
                 }
+            case .text where line.pulse:
+                // Folded AGENTS totals: flashes red over the label colour,
+                // like the ATTENTION row it stands in for.
+                (line.label as NSString).draw(at: p, withAttributes: labelAttrs)
+                ctx.saveGState()
+                ctx.setAlpha(pulse)
+                (line.label as NSString).draw(at: p, withAttributes: pulseAttrs)
+                ctx.restoreGState()
             case .text:
                 (line.label as NSString).draw(at: p, withAttributes: valueAttrs[line.severity] ?? labelAttrs)
             case .field:

@@ -379,7 +379,8 @@ func agentsTests() {
         let w = FakeWorld("agents-budget-compact")
         writeMixedRoster(w)
         let p = w.agentsPanel(dead: [90], maxLines: 7)
-        expectEqual(p.lines.first, .text("RUN 10 · ATT 2 · ACT 3 · AWT 2 · DOR 3 · BG 0", .alert))
+        expectEqual(p.lines.first?.label, "RUN 10 · ATT 2 · ACT 3 · AWT 2 · DOR 3 · BG 0")
+        expectEqual(p.lines.first?.severity, .alert)
         expectEqual(p.lines.filter { $0.style == .field }.map(\.value),
                     ["APPROVE 5m", "INPUT NEEDED 1m", "ACTIVE 20m", "ACTIVE 10m", "ACTIVE 1m"])
         expectEqual(p.lines.last, .text("+2 more", .dim))
@@ -394,6 +395,18 @@ func agentsTests() {
         expectEqual(one.lines.count, 1)
         expectEqual(one.lines.first?.value, "APPROVE 5m")
         expectEqual(one.lines.first?.severity, .alert)
+    }
+
+    test("agents: folded totals keep the attention pulse the ATTENTION row had") {
+        let w = FakeWorld("agents-budget-pulse")
+        writeMixedRoster(w)
+        let p = w.agentsPanel(dead: [90], maxLines: 5)
+        expect(p.pulse)
+        expectEqual(p.lines.filter(\.pulse).map(\.label), ["RUN 10 · ATT 2 · ACT 3 · AWT 2 · DOR 3 · BG 0"])
+        let calm = FakeWorld("agents-budget-nopulse")
+        calm.writeSession(FakeSession(pid: 1, cwd: "/r/a", status: "busy"))
+        calm.writeSession(FakeSession(pid: 2, cwd: "/r/b", status: "busy"))
+        expect(calm.agentsPanel(maxLines: 3).lines.allSatisfy { !$0.pulse })
     }
 
     test("agents: compact totals are not red without attention and carry the stale marker's place") {
